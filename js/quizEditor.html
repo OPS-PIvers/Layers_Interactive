@@ -1,0 +1,486 @@
+const QuizEditor = (() => {
+    const modalElement = document.getElementById('quiz-editor-modal');
+    const bodyElement = document.getElementById('quiz-editor-body');
+    const saveButton = document.getElementById('quiz-editor-save-button');
+
+    let currentQuizData = null; // The quiz object being edited { enabled, questions: [...] ... }
+    let currentElementId = null; // ID of the element this quiz belongs to
+    let currentSelectedQuestionId = null;
+    let questionListElement;
+    let detailPaneElement;
+    let isDirty = false; // Track unsaved changes within the editor
+
+    function _init() {
+        // Attach listener to save button within the modal
+        Utils.listen(saveButton, 'click', saveQuiz);
+    }
+
+    function open(quizData, elementId) {
+        if (!modalElement || !bodyElement) {
+            console.error("Quiz Editor modal elements not found.");
+            return;
+        }
+        console.log("Opening Quiz Editor for element:", elementId, "with data:", quizData);
+
+        // Deep copy the quiz data to avoid modifying the original state directly until save
+        currentQuizData = JSON.parse(JSON.stringify(quizData));
+        // Ensure questions array exists
+        currentQuizData.questions = currentQuizData.questions || [];
+        currentElementId = elementId;
+        currentSelectedQuestionId = currentQuizData.questions.length > 0 ? currentQuizData.questions[0].questionId : null;
+        isDirty = false;
+
+        renderModalContent();
+        modalElement.classList.add('active');
+    }
+
+    function close() {
+        if (isDirty && !confirm("You have unsaved changes in the Quiz Editor. Discard changes?")) {
+            return;
+        }
+        modalElement.classList.remove('active');
+        bodyElement.innerHTML = ''; // Clear content
+        currentQuizData = null;
+        currentElementId = null;
+        currentSelectedQuestionId = null;
+        isDirty = false;
+    }
+
+    function markDirty() {
+        isDirty = true;
+        // Optionally indicate unsaved changes in the UI (e.g., asterisk on title)
+    }
+
+    function renderModalContent() {
+        bodyElement.innerHTML = `
+            <div id="quiz-editor-list-pane">
+                <ul id="quiz-editor-list"></ul>
+                <div class="controls" style="margin-top: auto;">
+                    <button id="quiz-add-question-btn">Add Question</button>
+                    <button id="quiz-delete-question-btn" disabled>Delete Selected</button>
+                    <!-- Move Up/Down later -->
+                </div>
+            </div>
+            <div id="quiz-editor-detail-pane">
+                <!-- Details render here -->
+            </div>
+        `;
+        questionListElement = document.getElementById('quiz-editor-list');
+        detailPaneElement = document.getElementById('quiz-editor-detail-pane');
+
+        // Attach button listeners
+        Utils.listen('#quiz-add-question-btn', 'click', addQuestion);
+        Utils.listen('#quiz-delete-question-btn', 'click', deleteSelectedQuestion);
+
+        renderQuestionList();
+        renderQuestionDetails();
+    }
+
+    function renderQuestionList() {
+        if (!questionListElement || !currentQuizData) return;
+        const questions = currentQuizData.questions;
+        questionListElement.innerHTML = questions.map((q, index) => `
+            <li data-question-id="${q.questionId}" class="${q.questionId === currentSelectedQuestionId ? 'selected' : ''}" onclick="QuizEditor.selectQuestion('${q.questionId}')">
+                Q${index + 1}: ${q.questionType} - ${q.prompt.substring(0, 20)}${q.prompt.length > 20 ? '...' : ''}
+            </li>
+        `).join('');
+
+        // Enable/disable delete button
+        const deleteBtn = document.getElementById('quiz-delete-question-btn');
+        if (deleteBtn) deleteBtn.disabled = !currentSelectedQuestionId || questions.length === 0;
+    }
+
+    function selectQuestion(questionId) {
+        if (questionId === currentSelectedQuestionId) return; // No change
+        // TODO: Save current details before switching? Or assume changes are temporary until modal save?
+        // Let's assume changes are temporary for now. User needs to click modal save.
+        currentSelectedQuestionId = questionId;
+        renderQuestionList(); // Update selection highlight
+        renderQuestionDetails();
+    }
+
+    function renderQuestionDetails() {
+        if (!detailPaneElement || !currentQuizData) return;
+        const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+
+        if (!question) {
+            detailPaneElement.innerHTML = '<p>Select a question from the list or add a new one.</p>';
+            return;
+        }
+
+        let detailHtml = `
+            <h3>Question Details (Q${currentQuizData.questions.findIndex(q => q.questionId === question.questionId) + 1})</h3>
+            <div class="form-group">
+                <label for="quiz-edit-type">Question Type:</label>
+                <select id="quiz-edit-type">
+                    <option value="multipleChoice" ${question.questionType === 'multipleChoice' ? 'selected' : ''}>Multiple Choice</option>
+                    <option value="fillBlank" ${question.questionType === 'fillBlank' ? 'selected' : ''}>Fill-in-the-Blank</option>
+                    <option value="matching" ${question.questionType === 'matching' ? 'selected' : ''}>Matching</option>
+                    <option value="ordering" ${question.questionType === 'ordering' ? 'selected' : ''}>Ordering</option>
+                </select>
+            </div>
+             <div class="form-group">
+                <label for="quiz-edit-prompt">Prompt:</label>
+                <textarea id="quiz-edit-prompt">${question.prompt || ''}</textarea>
+            </div>
+            <div class="question-type-specific">
+                ${renderQuestionTypeSpecificFields(question)}
+            </div>
+            <!-- <button id="quiz-save-question-details">Save Question Changes</button> --> <!-- Removed: Save happens on modal save -->
+        `;
+        detailPaneElement.innerHTML = detailHtml;
+
+        // Attach listeners for detail fields
+        Utils.listen('#quiz-edit-type', 'change', handleQuestionTypeChange);
+        Utils.listen('#quiz-edit-prompt', 'input', handleDetailChange);
+        // Attach listeners specific to the type
+        attachTypeSpecificListeners(question.questionType);
+    }
+
+    function renderQuestionTypeSpecificFields(question) {
+        switch (question.questionType) {
+            case 'multipleChoice':
+                const options = question.options || [];
+                return `
+                    <h4>Options</h4>
+                    <div id="quiz-mc-options-list">
+                        ${options.map((opt, index) => `
+                            <div class="quiz-editor-option" data-option-id="${opt.optionId}">
+                                <input type="radio" name="mc-correct" value="${opt.optionId}" ${opt.isCorrect ? 'checked' : ''} onchange="QuizEditor.handleDetailChange()">
+                                <input type="text" placeholder="Option text" value="${opt.text || ''}" oninput="QuizEditor.handleDetailChange()">
+                                <button class="quiz-editor-remove-button" onclick="QuizEditor.removeMCOption('${opt.optionId}')">×</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <button id="quiz-add-mc-option-btn">Add Option</button>
+                `;
+            case 'fillBlank':
+                return `
+                    <h4>Answer</h4>
+                    <div class="form-group">
+                        <label for="quiz-fill-answer">Correct Answer:</label>
+                        <input type="text" id="quiz-fill-answer" value="${question.correctAnswer || ''}">
+                    </div>
+                    <div class="form-group-inline">
+                         <input type="checkbox" id="quiz-fill-caseSensitive" ${question.caseSensitive ? 'checked' : ''}>
+                         <label for="quiz-fill-caseSensitive">Case Sensitive</label>
+                    </div>
+                `;
+            case 'matching':
+                 const pairs = question.pairs || [];
+                 return `
+                    <h4>Matching Pairs (Prompt -> Answer)</h4>
+                     <div id="quiz-matching-pairs-list">
+                        ${pairs.map((pair, index) => `
+                            <div class="quiz-editor-pair" data-pair-id="${pair.pairId}">
+                                <input type="text" class="match-prompt" placeholder="Prompt ${index + 1}" value="${pair.prompt || ''}" oninput="QuizEditor.handleDetailChange()">
+                                <span>⇢</span>
+                                <input type="text" class="match-answer" placeholder="Answer ${index + 1}" value="${pair.answer || ''}" oninput="QuizEditor.handleDetailChange()">
+                                <button class="quiz-editor-remove-button" onclick="QuizEditor.removeMatchingPair('${pair.pairId}')">×</button>
+                            </div>
+                        `).join('')}
+                     </div>
+                     <button id="quiz-add-matching-pair-btn">Add Pair</button>
+                 `;
+            case 'ordering':
+                 const items = question.items || [];
+                 return `
+                    <h4>Items (Enter in Correct Order)</h4>
+                    <div id="quiz-ordering-items-list">
+                         ${items.map((item, index) => `
+                            <div class="quiz-editor-item" data-item-index="${index}">
+                                <span>${index + 1}.</span>
+                                <input type="text" placeholder="Item text" value="${item || ''}" oninput="QuizEditor.handleDetailChange()">
+                                <button class="quiz-editor-remove-button" onclick="QuizEditor.removeOrderingItem(${index})">×</button>
+                            </div>
+                         `).join('')}
+                    </div>
+                    <button id="quiz-add-ordering-item-btn">Add Item</button>
+                    <p class="help-text">Viewers will see these items shuffled and must drag them into the correct order you define here.</p>
+                 `;
+            default:
+                return '<p>Unknown question type.</p>';
+        }
+    }
+
+    function attachTypeSpecificListeners(questionType) {
+        switch (questionType) {
+            case 'multipleChoice':
+                Utils.listen('#quiz-add-mc-option-btn', 'click', addMCOption);
+                 // Radio buttons/text inputs already have inline listeners for handleDetailChange
+                break;
+            case 'fillBlank':
+                Utils.listen('#quiz-fill-answer', 'input', handleDetailChange);
+                Utils.listen('#quiz-fill-caseSensitive', 'change', handleDetailChange);
+                break;
+            case 'matching':
+                 Utils.listen('#quiz-add-matching-pair-btn', 'click', addMatchingPair);
+                 // Inputs have inline listeners
+                break;
+            case 'ordering':
+                Utils.listen('#quiz-add-ordering-item-btn', 'click', addOrderingItem);
+                // Inputs have inline listeners
+                break;
+        }
+    }
+
+    function handleQuestionTypeChange(event) {
+        const newType = event.target.value;
+        const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+        if (question && question.questionType !== newType) {
+             if (!confirm(`Changing question type will remove existing options/answers for this question. Continue?`)) {
+                 event.target.value = question.questionType; // Revert dropdown
+                 return;
+             }
+            question.questionType = newType;
+            // Reset type-specific data
+            question.options = (newType === 'multipleChoice') ? [] : undefined;
+            question.correctAnswer = (newType === 'fillBlank') ? '' : undefined;
+            question.caseSensitive = (newType === 'fillBlank') ? false : undefined;
+            question.pairs = (newType === 'matching') ? [] : undefined;
+            question.items = (newType === 'ordering') ? [] : undefined;
+            markDirty();
+            renderQuestionDetails(); // Re-render details for the new type
+        }
+    }
+
+     // Generic handler for changes in the detail pane inputs/textarea/checkboxes
+     function handleDetailChange() {
+         // Update the currentQuizData in memory based on UI fields
+         const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+         if (!question) return;
+
+         question.prompt = document.getElementById('quiz-edit-prompt')?.value || '';
+
+         switch (question.questionType) {
+            case 'multipleChoice':
+                question.options = [];
+                document.querySelectorAll('#quiz-mc-options-list .quiz-editor-option').forEach(optDiv => {
+                    const optionId = optDiv.dataset.optionId;
+                    const text = optDiv.querySelector('input[type="text"]').value;
+                    const isCorrect = optDiv.querySelector('input[type="radio"]').checked;
+                    question.options.push({ optionId, text, isCorrect });
+                });
+                // Ensure at least one is marked correct? Validation on save maybe.
+                break;
+            case 'fillBlank':
+                 question.correctAnswer = document.getElementById('quiz-fill-answer')?.value || '';
+                 question.caseSensitive = document.getElementById('quiz-fill-caseSensitive')?.checked || false;
+                break;
+            case 'matching':
+                question.pairs = [];
+                document.querySelectorAll('#quiz-matching-pairs-list .quiz-editor-pair').forEach(pairDiv => {
+                    const pairId = pairDiv.dataset.pairId;
+                    const prompt = pairDiv.querySelector('.match-prompt').value;
+                    const answer = pairDiv.querySelector('.match-answer').value;
+                    question.pairs.push({ pairId, prompt, answer });
+                });
+                break;
+            case 'ordering':
+                 question.items = [];
+                 document.querySelectorAll('#quiz-ordering-items-list .quiz-editor-item input[type="text"]').forEach(itemInput => {
+                    question.items.push(itemInput.value);
+                 });
+                break;
+         }
+         markDirty();
+         // console.log("Quiz data updated in memory:", question);
+     }
+
+
+    // --- Add/Remove Actions ---
+
+    function addQuestion() {
+        const newQuestion = {
+            questionId: Utils.generateUUID(),
+            questionType: 'multipleChoice', // Default type
+            prompt: 'New Question Prompt',
+            options: [{ optionId: Utils.generateUUID(), text: 'Option 1', isCorrect: true }], // Add one default option
+        };
+        currentQuizData.questions.push(newQuestion);
+        currentSelectedQuestionId = newQuestion.questionId; // Select the new question
+        markDirty();
+        renderQuestionList();
+        renderQuestionDetails();
+    }
+
+     function deleteSelectedQuestion() {
+         if (!currentSelectedQuestionId) return;
+         if (confirm("Are you sure you want to delete this question?")) {
+             const qIndex = currentQuizData.questions.findIndex(q => q.questionId === currentSelectedQuestionId);
+             currentQuizData.questions = currentQuizData.questions.filter(q => q.questionId !== currentSelectedQuestionId);
+             currentSelectedQuestionId = currentQuizData.questions[qIndex - 1]?.questionId || currentQuizData.questions[0]?.questionId || null; // Select previous or first
+             markDirty();
+             renderQuestionList();
+             renderQuestionDetails(); // Render selection or placeholder
+         }
+     }
+
+     // MC Specific Add/Remove
+     function addMCOption() {
+         const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+         if (!question || question.questionType !== 'multipleChoice') return;
+         question.options = question.options || [];
+         const newOption = { optionId: Utils.generateUUID(), text: '', isCorrect: false };
+         // Ensure only one correct if radios used - handleDetailChange manages this
+         question.options.push(newOption);
+         markDirty();
+         renderQuestionDetails(); // Re-render details to show new option
+     }
+     function removeMCOption(optionId) {
+         const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+         if (!question || question.questionType !== 'multipleChoice') return;
+         question.options = question.options.filter(opt => opt.optionId !== optionId);
+          // If the removed one was correct, ensure another one is? Or allow no correct? Let's allow no correct for now.
+         markDirty();
+         renderQuestionDetails();
+     }
+
+    // Matching Specific Add/Remove
+    function addMatchingPair() {
+         const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+         if (!question || question.questionType !== 'matching') return;
+         question.pairs = question.pairs || [];
+         question.pairs.push({ pairId: Utils.generateUUID(), prompt: '', answer: '' });
+         markDirty();
+         renderQuestionDetails();
+    }
+    function removeMatchingPair(pairId) {
+         const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+         if (!question || question.questionType !== 'matching') return;
+         question.pairs = question.pairs.filter(p => p.pairId !== pairId);
+         markDirty();
+         renderQuestionDetails();
+    }
+
+    // Ordering Specific Add/Remove
+    function addOrderingItem() {
+         const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+         if (!question || question.questionType !== 'ordering') return;
+         question.items = question.items || [];
+         question.items.push('');
+         markDirty();
+         renderQuestionDetails();
+    }
+     function removeOrderingItem(index) {
+         const question = currentQuizData.questions.find(q => q.questionId === currentSelectedQuestionId);
+         if (!question || question.questionType !== 'ordering' || !question.items) return;
+         question.items.splice(index, 1);
+         markDirty();
+         renderQuestionDetails();
+     }
+
+    // --- Save ---
+
+    function saveQuiz() {
+         // Perform final validation?
+         // E.g., ensure MC has a correct answer, FillBlank has answer, etc.
+         if (!validateQuizData(currentQuizData)) {
+             // Validation function would show errors using Utils.showError
+             return;
+         }
+
+         // Save the current state of details (in case last change was not captured by input/change)
+          handleDetailChange();
+
+         // Update the master state in StateManager
+         StateManager.updateElementData(currentElementId, {
+             interactions: {
+                // Need to merge carefully, preserving other interactions
+                ...StateManager.getElementData(currentElementId).interactions,
+                features: {
+                    ...StateManager.getElementData(currentElementId).interactions?.features,
+                    quiz: currentQuizData // Replace with the edited quiz data
+                }
+             }
+         });
+
+          // Update the properties panel in EditorUI to reflect potential changes (like question count)
+          const activeObj = CanvasController.getObjectById(currentElementId);
+          if (activeObj && EditorUI.updatePropertiesPanel) {
+             EditorUI.updatePropertiesPanel(activeObj);
+          }
+
+         console.log("Quiz Saved to StateManager for element:", currentElementId);
+         isDirty = false; // Mark as clean after save
+         close(); // Close the modal
+    }
+
+     function validateQuizData(quizData) {
+         let isValid = true;
+         let errorMessages = [];
+
+         if (!quizData || !quizData.questions) return true; // No questions is valid
+
+         quizData.questions.forEach((q, index) => {
+             const qNum = index + 1;
+             if (!q.prompt?.trim()) {
+                 isValid = false;
+                 errorMessages.push(`Question ${qNum}: Prompt cannot be empty.`);
+             }
+
+             switch (q.questionType) {
+                case 'multipleChoice':
+                    if (!q.options || q.options.length < 2) {
+                         isValid = false;
+                         errorMessages.push(`Question ${qNum} (Multiple Choice): Must have at least 2 options.`);
+                    } else if (!q.options.some(opt => opt.isCorrect)) {
+                        isValid = false;
+                        errorMessages.push(`Question ${qNum} (Multiple Choice): Must have at least one correct option marked.`);
+                    }
+                     if (q.options.some(opt => !opt.text?.trim())) {
+                         isValid = false;
+                         errorMessages.push(`Question ${qNum} (Multiple Choice): All options must have text.`);
+                     }
+                    break;
+                case 'fillBlank':
+                    if (!q.correctAnswer?.trim()) {
+                        isValid = false;
+                        errorMessages.push(`Question ${qNum} (Fill Blank): Correct answer cannot be empty.`);
+                    }
+                    break;
+                case 'matching':
+                     if (!q.pairs || q.pairs.length < 2) {
+                         isValid = false;
+                         errorMessages.push(`Question ${qNum} (Matching): Must have at least 2 pairs.`);
+                     } else if (q.pairs.some(p => !p.prompt?.trim() || !p.answer?.trim())) {
+                          isValid = false;
+                          errorMessages.push(`Question ${qNum} (Matching): All prompts and answers in pairs must have text.`);
+                     }
+                    break;
+                case 'ordering':
+                    if (!q.items || q.items.length < 2) {
+                         isValid = false;
+                         errorMessages.push(`Question ${qNum} (Ordering): Must have at least 2 items.`);
+                    } else if (q.items.some(item => !item?.trim())) {
+                         isValid = false;
+                         errorMessages.push(`Question ${qNum} (Ordering): All items must have text.`);
+                    }
+                    break;
+             }
+         });
+
+         if (!isValid) {
+             Utils.showError("Quiz validation failed:\n- " + errorMessages.join("\n- "));
+         }
+         return isValid;
+     }
+
+
+    // --- Public API ---
+    _init(); // Initialize internal listeners
+    return {
+        open,
+        close,
+        // Expose internal methods needed by inline event handlers
+        selectQuestion,
+        handleDetailChange,
+        addMCOption,
+        removeMCOption,
+        addMatchingPair,
+        removeMatchingPair,
+        addOrderingItem,
+        removeOrderingItem
+    };
+
+})();

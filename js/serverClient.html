@@ -1,0 +1,53 @@
+const ServerClient = (() => {
+
+  function runAsync(functionName, ...args) {
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(error => {
+           console.error(`Server call failed for ${functionName}:`, error);
+           // Try to extract a meaningful message
+           const message = error.message || (typeof error === 'string' ? error : 'An unknown server error occurred.');
+           reject(new Error(message)); // Reject with an Error object
+        })
+        [functionName](...args);
+    });
+  }
+
+  return {
+    saveProject(projectJsonString, projectId, title) {
+      Utils.showLoadingIndicator(true, 'Saving Project...');
+      return runAsync('saveProjectData', projectJsonString, projectId, title)
+          .finally(() => Utils.showLoadingIndicator(false));
+    },
+    loadProject(projectId) {
+      Utils.showLoadingIndicator(true, 'Loading Project...');
+      return runAsync('loadProjectData', projectId)
+          .finally(() => Utils.showLoadingIndicator(false));
+    },
+    listProjects() {
+        Utils.showLoadingIndicator(true, 'Loading Project List...');
+        return runAsync('listProjects')
+            .finally(() => Utils.showLoadingIndicator(false));
+    },
+    uploadImage(dataUrl, filename) {
+      Utils.showLoadingIndicator(true, 'Uploading Image...');
+      return runAsync('saveImageFile', dataUrl, filename)
+          .finally(() => Utils.showLoadingIndicator(false));
+    },
+    loadImage(fileId) {
+      // Usually don't show loading for this as it's often background
+      return runAsync('getImageDataUrl', fileId);
+    },
+    sendQuizToUser(resultsPayload, userEmail) {
+      Utils.showLoadingIndicator(true, 'Sending Results...');
+      return runAsync('sendQuizResultsToUser', resultsPayload, userEmail)
+          .finally(() => Utils.showLoadingIndicator(false));
+    },
+    sendQuizToCreator(resultsPayload, creatorEmail) {
+      Utils.showLoadingIndicator(true, 'Sending Results...');
+      return runAsync('sendQuizResultsToCreator', resultsPayload, creatorEmail)
+          .finally(() => Utils.showLoadingIndicator(false));
+    }
+  };
+})();

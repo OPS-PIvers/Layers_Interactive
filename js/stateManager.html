@@ -1,0 +1,333 @@
+const StateManager = (() => {
+  let currentProject = null;
+  let currentSlideId = null;
+  let isDirty = false; // Track unsaved changes
+
+  // Viewer specific state (separate from project data)
+  let viewerState = {
+    currentSequenceIndex: -1,
+    actionHistory: [], // For undo/redo in viewer sequence nav
+    isSequenceActive: false
+  };
+
+  // --- Private Helper ---
+  function _getDefaultProjectStructure() {
+      const slideId = Utils.generateUUID();
+      return {
+        projectId: null,
+        title: "Untitled Project",
+        version: 4, // Keep track of data model version
+        createdAt: new Date().toISOString(),
+        lastModified: new Date().toISOString(),
+        slides: [
+          _getDefaultSlideStructure(slideId)
+        ],
+        viewerSettings: {
+          enablePrevNext: true,
+          undoMode: "simple" // Or "full" - affects non-quiz undo
+        }
+      };
+  }
+
+  function _getDefaultSlideStructure(id = null) {
+      return {
+          slideId: id || Utils.generateUUID(),
+          title: "New Slide",
+          imageUrl: null, // Drive file ID
+          imageFileId: null, // Keep Drive ID separate if needed
+          imageWidth: 800, // Default dimensions, adjust as needed
+          imageHeight: 600,
+          backgroundColor: '#FFFFFF', // Default bg color if no image
+          elements: [],
+          sequence: [] // Array of element IDs in order
+      };
+  }
+
+   function _resetViewerState() {
+        viewerState.currentSequenceIndex = -1;
+        viewerState.actionHistory = [];
+        viewerState.isSequenceActive = false;
+   }
+
+   function _touch() {
+        isDirty = true;
+        if (currentProject) {
+            currentProject.lastModified = new Date().toISOString();
+        }
+        // Notify UI (e.g., change save button state)
+        if (typeof EditorUI !== 'undefined' && EditorUI.updateSaveStatus) {
+             EditorUI.updateSaveStatus(isDirty);
+        }
+   }
+
+  // --- Public API ---
+  return {
+    init(isEditor = true) {
+      currentProject = _getDefaultProjectStructure();
+      currentSlideId = currentProject.slides[0].slideId;
+      isDirty = !isEditor; // New project is considered dirty until saved in editor
+       _resetViewerState();
+      console.log("StateManager Initialized. Default project created.");
+    },
+
+    loadProjectData(jsonString) {
+      try {
+        currentProject = JSON.parse(jsonString);
+        // Basic validation/migration if needed based on version
+        if (!currentProject.slides || currentProject.slides.length === 0) {
+           console.warn("Loaded project has no slides. Adding a default one.");
+           currentProject.slides = [_getDefaultSlideStructure()];
+        }
+         if (!currentProject.viewerSettings) { // Add default if missing
+             currentProject.viewerSettings = _getDefaultProjectStructure().viewerSettings;
+         }
+        currentSlideId = currentProject.slides[0].slideId;
+        isDirty = false; // Loaded project is initially clean
+        _resetViewerState(); // Reset viewer state when loading project
+        console.log(`Project "${currentProject.title}" (${currentProject.projectId}) loaded.`);
+        if (typeof EditorUI !== 'undefined' && EditorUI.updateSaveStatus) {
+             EditorUI.updateSaveStatus(isDirty); // Update save button state
+        }
+         if (typeof EditorUI !== 'undefined' && EditorUI.updateProjectTitleDisplay) {
+             EditorUI.updateProjectTitleDisplay();
+         }
+      } catch (error) {
+        console.error("Failed to parse project data:", error);
+        Utils.showError("Failed to load project: Invalid data format.");
+        this.init(); // Reset to default state on load error
+        return false; // Indicate failure
+      }
+      return true; // Indicate success
+    },
+
+    getProjectJsonString() {
+      if (!currentProject) return null;
+      return JSON.stringify(currentProject, null, 2); // Pretty print JSON
+    },
+
+    markAsSaved(projectId, lastModified) {
+        if(currentProject) {
+            currentProject.projectId = projectId;
+            currentProject.lastModified = lastModified;
+            isDirty = false;
+            if (typeof EditorUI !== 'undefined' && EditorUI.updateSaveStatus) {
+                EditorUI.updateSaveStatus(isDirty, lastModified);
+            }
+             if (typeof EditorUI !== 'undefined' && EditorUI.updateProjectTitleDisplay) {
+                EditorUI.updateProjectTitleDisplay(); // Update title in case it includes ID implicitly
+            }
+        }
+    },
+
+    isDirty() { return isDirty; },
+
+    getCurrentProject() { return currentProject; },
+    getProjectId() { return currentProject?.projectId; },
+    getProjectTitle() { return currentProject?.title || ''; },
+    setProjectTitle(title) {
+        if (currentProject && currentProject.title !== title) {
+            currentProject.title = title;
+            _touch();
+             if (typeof EditorUI !== 'undefined' && EditorUI.updateProjectTitleDisplay) {
+                EditorUI.updateProjectTitleDisplay();
+            }
+        }
+    },
+
+    // --- Slide Management ---
+    getSlides() {
+        return currentProject?.slides || [];
+    },
+
+    getCurrentSlide() {
+      if (!currentProject || !currentSlideId) return null;
+      return currentProject.slides.find(s => s.slideId === currentSlideId);
+    },
+
+    getCurrentSlideId() { return currentSlideId; },
+
+    setCurrentSlideId(id) {
+      if (currentProject && currentProject.slides.some(s => s.slideId === id)) {
+        currentSlideId = id;
+         _resetViewerState(); // Reset sequence when changing slides
+        console.log("Current slide set to:", id);
+        // Notify UI? Usually handled by caller (e.g., EditorUI re-renders)
+      } else {
+          console.error("Attempted to set invalid slide ID:", id);
+      }
+    },
+
+    addSlide() {
+        if (!currentProject) return null;
+        const newSlide = _getDefaultSlideStructure();
+        newSlide.title = `Slide ${currentProject.slides.length + 1}`;
+        currentProject.slides.push(newSlide);
+        _touch();
+        console.log("Added new slide:", newSlide.slideId);
+        return newSlide.slideId; // Return new ID so UI can switch to it
+    },
+
+    deleteSlide(idToDelete) {
+        if (!currentProject || currentProject.slides.length <= 1) {
+            Utils.showError("Cannot delete the last slide.");
+            return false; // Don't allow deleting the last slide
+        }
+        const initialLength = currentProject.slides.length;
+        currentProject.slides = currentProject.slides.filter(s => s.slideId !== idToDelete);
+        if (currentProject.slides.length < initialLength) {
+             _touch();
+            console.log("Deleted slide:", idToDelete);
+            // If the deleted slide was the current one, switch to the first available
+            if (currentSlideId === idToDelete) {
+                this.setCurrentSlideId(currentProject.slides[0].slideId);
+            }
+            return true;
+        }
+        return false;
+    },
+
+    updateSlideProperties(slideId, properties) {
+        const slide = currentProject?.slides.find(s => s.slideId === slideId);
+        if (slide) {
+            Object.assign(slide, properties);
+             _touch();
+             console.log("Updated properties for slide:", slideId, properties);
+             return true;
+        }
+        console.warn("Slide not found for update:", slideId);
+        return false;
+    },
+
+     // --- Element Management ---
+    getElementData(elementId) {
+      const slide = this.getCurrentSlide();
+      if (!slide) return null;
+      return slide.elements.find(el => el.id === elementId);
+    },
+
+    updateElementData(elementId, newData) {
+      const slide = this.getCurrentSlide();
+      if (!slide) return false;
+      const element = slide.elements.find(el => el.id === elementId);
+      if (element) {
+        // Deep merge might be needed for nested objects like 'style' or 'interactions'
+        // Simple Object.assign overwrites nested objects entirely.
+        // For now, let's assume newData contains the full structure for simplicity,
+        // but a recursive merge would be more robust.
+        Object.assign(element, newData);
+        // Ensure required nested structures exist
+        element.interactions = element.interactions || { triggers: {}, features: {} };
+        element.style = element.style || {};
+        _touch();
+        // console.log("Updated data for element:", elementId, newData); // Can be noisy
+        return true;
+      }
+      console.warn("Element not found for update:", elementId);
+      return false;
+    },
+
+    addElementData(elementData) {
+      const slide = this.getCurrentSlide();
+      if (!slide) return false;
+      // Ensure it has an ID
+      if (!elementData.id) {
+        elementData.id = Utils.generateUUID();
+      }
+      // Add default structures if missing
+       elementData.interactions = elementData.interactions || { triggers: {}, features: {
+           reveal: {}, spotlight: {}, panAndZoom: {}, quiz: { enabled: false, questions: [] }
+       }};
+       elementData.style = elementData.style || { opacity: 1, color: '#FF0000' }; // Example defaults
+       elementData.nickname = elementData.nickname || `Element ${slide.elements.length + 1}`;
+
+      slide.elements.push(elementData);
+      _touch();
+      console.log("Added element:", elementData.id);
+      return elementData.id;
+    },
+
+    removeElementData(elementId) {
+      const slide = this.getCurrentSlide();
+      if (!slide) return false;
+      const initialLength = slide.elements.length;
+      slide.elements = slide.elements.filter(el => el.id !== elementId);
+      // Also remove from sequence if present
+      slide.sequence = slide.sequence.filter(seqId => seqId !== elementId);
+      if (slide.elements.length < initialLength) {
+        _touch();
+        console.log("Removed element:", elementId);
+        return true;
+      }
+      return false;
+    },
+
+    // --- Sequence Management ---
+    getSlideSequence() {
+        const slide = this.getCurrentSlide();
+        return slide?.sequence || [];
+    },
+
+    setSlideSequence(newSequenceArray) {
+        const slide = this.getCurrentSlide();
+        if (slide) {
+            // Validate? Ensure IDs exist in elements? Maybe later.
+            slide.sequence = newSequenceArray;
+             _touch();
+            console.log("Updated sequence for slide:", currentSlideId);
+        }
+    },
+
+    // --- Viewer State & Sequence Navigation ---
+    getViewerSettings() {
+        return currentProject?.viewerSettings || _getDefaultProjectStructure().viewerSettings;
+    },
+
+    getCurrentSequenceIndex() { return viewerState.currentSequenceIndex; },
+    setCurrentSequenceIndex(index) {
+        const sequence = this.getSlideSequence();
+        if (index >= -1 && index < sequence.length) {
+            viewerState.currentSequenceIndex = index;
+             viewerState.isSequenceActive = index >= 0; // Sequence is active if index >= 0
+             // Notify UI (Viewer Navigation)
+             if (typeof InteractionHandler !== 'undefined' && InteractionHandler.updateNavUI) {
+                 InteractionHandler.updateNavUI();
+             }
+        } else {
+            console.warn("Attempted to set invalid sequence index:", index);
+        }
+    },
+    isSequenceActive() { return viewerState.isSequenceActive; },
+    startSequence() {
+        if (this.getSlideSequence().length > 0) {
+            this.setCurrentSequenceIndex(0); // Start at the first item
+        }
+    },
+
+    // Action History for Viewer Undo/Redo (Simplified)
+    // 'action' could be { type: 'reveal', elementId: '...', previousState: {...} }
+    // or { type: 'zoom', previousViewport: [...] }
+    // or { type: 'quiz_trigger', elementId: '...', previousState: {...} }
+    addActionToHistory(action) {
+      // In simple undo mode, history might just track the index
+      // In full undo mode, it tracks detailed state changes
+      viewerState.actionHistory.push(action);
+       if (typeof InteractionHandler !== 'undefined' && InteractionHandler.updateNavUI) {
+          InteractionHandler.updateNavUI(); // Update prev button state
+       }
+    },
+    popActionFromHistory() {
+      const action = viewerState.actionHistory.pop();
+       if (typeof InteractionHandler !== 'undefined' && InteractionHandler.updateNavUI) {
+          InteractionHandler.updateNavUI(); // Update prev button state
+       }
+       return action;
+    },
+    getPreviousAction() {
+        return viewerState.actionHistory.length > 0 ? viewerState.actionHistory[viewerState.actionHistory.length - 1] : null;
+    },
+    getActionHistory() {
+        return viewerState.actionHistory;
+    }
+
+  };
+})();

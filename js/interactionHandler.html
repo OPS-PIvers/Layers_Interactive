@@ -1,0 +1,401 @@
+const InteractionHandler = (() => {
+    let isViewer = false;
+    let viewerNavContainer;
+    let prevButton, nextButton, stepIndicator;
+
+    function init(mode) {
+        isViewer = (mode === 'viewer');
+        if (isViewer) {
+            viewerNavContainer = document.getElementById('viewer-navigation');
+            prevButton = document.getElementById('prev-step-button');
+            nextButton = document.getElementById('next-step-button');
+            stepIndicator = document.getElementById('step-indicator');
+            Utils.listen(prevButton, 'click', executePreviousStep);
+            Utils.listen(nextButton, 'click', executeNextStep);
+        }
+    }
+
+    function attachListenersToObject(fabricObject) {
+        if (!fabricObject) return;
+        const data = fabricObject.appData; // Data from StateManager
+
+        // Remove previous listeners to prevent duplicates if re-attaching
+        fabricObject.off('mousedown');
+        fabricObject.off('mouseover');
+        fabricObject.off('mouseout');
+
+        // Add listener based on trigger config
+        if (data?.interactions?.triggers?.onClick) {
+            fabricObject.on('mousedown', () => handleInteractionTrigger(fabricObject));
+        }
+        // Add hover effects or listeners if needed later
+        // if (data?.interactions?.triggers?.onHover) { ... }
+
+        // Set cursor style (only really matters in viewer)
+        if (!isViewer) {
+            fabricObject.hoverCursor = 'move'; // Default editor cursor
+        } else {
+            // Set pointer cursor only if there's an interaction defined
+            const hasInteraction = Object.values(data?.interactions?.features || {}).some(f => f.enabled);
+            fabricObject.hoverCursor = hasInteraction ? 'pointer' : 'default';
+        }
+    }
+
+    function handleInteractionTrigger(fabricObject) {
+        const elementData = fabricObject.appData;
+        if (!elementData || !elementData.interactions) return;
+
+        console.log(`Interaction triggered by: ${elementData.nickname || elementData.id}`);
+
+        // --- Viewer Sequence Logic ---
+        if (isViewer && StateManager.isSequenceActive()) {
+            // If click happens during sequence, only proceed if it's the *current* sequence item
+            const currentSequenceIndex = StateManager.getCurrentSequenceIndex();
+            const sequence = StateManager.getSlideSequence();
+            if (sequence[currentSequenceIndex] !== elementData.id) {
+                console.log("Clicked element is not the current sequence item. Ignoring.");
+                // Optional: provide visual feedback that it's not the right item?
+                 // Simple visual cue: quick flash/shake
+                flashElement(fabricObject, '#EA4335'); // Flash red
+                return; // Don't proceed
+            }
+             // If it *is* the current item, execute its action and advance
+             executeActionForElement(elementData, fabricObject, true); // true = advance sequence after action
+
+        } else if (isViewer && !StateManager.isSequenceActive()) {
+            // Sequence not active, just perform the action directly without advancing
+             executeActionForElement(elementData, fabricObject, false); // false = do not advance sequence
+
+        } else if (!isViewer) {
+             // In Editor mode, clicking might select or trigger a preview?
+             // For now, editor click is handled by canvas selection.
+             console.log("Interaction triggered in Editor mode (no action performed).");
+        }
+    }
+
+
+    function executeActionForElement(elementData, fabricObject, advanceSequence) {
+         const features = elementData.interactions?.features || {};
+         let actionCompleted = false; // Flag to track if any action was actually performed
+
+        // Store state *before* performing action (for potential undo)
+        const preActionState = captureStateSnapshot(elementData.id); // Capture state relevant to this element/viewport
+
+
+        // --- Execute Enabled Features ---
+        // Order might matter if multiple features are enabled (e.g., zoom then reveal)
+
+         // 1. Pan & Zoom
+         if (features.panAndZoom?.enabled) {
+             actionCompleted = true;
+             console.log("Executing Pan & Zoom");
+             const target = features.panAndZoom;
+             const targetVp = calculateTargetViewport(target.targetX, target.targetY, target.targetZoom);
+             CanvasController.animateViewport(targetVp, 500, () => {
+                 console.log("Pan & Zoom animation complete.");
+                  if (advanceSequence) { advanceSequenceAfterAction(elementData.id, 'panAndZoom', preActionState); }
+             });
+             // Note: If other actions need to happen *after* zoom, the callback structure gets complex.
+             // For now, assume other actions happen concurrently or immediately after *initiating* the zoom.
+         }
+
+        // 2. Reveal / Hide
+        if (features.reveal?.enabled && features.reveal.targetIds?.length > 0) {
+            actionCompleted = true;
+            console.log("Executing Reveal/Hide for targets:", features.reveal.targetIds);
+            features.reveal.targetIds.forEach(targetId => {
+                const targetObj = CanvasController.getObjectById(targetId);
+                if (targetObj) {
+                     // Toggle visibility or use specific animation? Let's toggle for now.
+                     targetObj.visible = !targetObj.visible;
+                     // TODO: Add animation (fadeIn/fadeOut) based on reveal config
+                }
+            });
+            CanvasController.getCanvas().requestRenderAll();
+        }
+
+         // 3. Spotlight (Needs implementation - overlay?)
+         if (features.spotlight?.enabled) {
+              actionCompleted = true;
+              console.warn("Spotlight feature execution not implemented.");
+              // Logic: Create a semi-transparent overlay covering the canvas,
+              // then "cut out" a shape (circle/rect) around the fabricObject.
+              // This is complex and might require adding/removing temporary canvas objects.
+         }
+
+         // 4. Quiz
+         if (features.quiz?.enabled) {
+              actionCompleted = true;
+              console.log("Executing Quiz");
+              // Open the quiz player modal.
+              // The QuizPlayer module will handle its own lifecycle and
+              // will call back to advance the sequence when the quiz is finished.
+              QuizPlayer.openQuiz(fabricObject, () => {
+                  // This callback is executed when the quiz is fully completed and closed.
+                  console.log("Quiz finished callback.");
+                  if (advanceSequence) { advanceSequenceAfterAction(elementData.id, 'quiz', preActionState); }
+              });
+              // IMPORTANT: Sequence advance happens *inside* the QuizPlayer callback now.
+              // We should not call advanceSequenceAfterAction immediately here for quizzes.
+              return; // Stop further execution flow here for quiz, let the callback handle it.
+         }
+
+         // If any non-async action was completed and sequence needs advancing
+         if (actionCompleted && advanceSequence && !features.panAndZoom?.enabled && !features.quiz?.enabled) {
+             advanceSequenceAfterAction(elementData.id, 'other', preActionState);
+         } else if (!actionCompleted) {
+              console.log("Triggered element has no enabled features.");
+              // Still advance sequence if it was the correct item, even if it does nothing?
+              // This seems correct - clicking the right item moves forward.
+               if (advanceSequence) { advanceSequenceAfterAction(elementData.id, 'no_op', preActionState); }
+         }
+    }
+
+    // --- Sequence Navigation (Viewer Only) ---
+
+    function applyInitialSequenceState() {
+         if (!isViewer) return;
+         const slide = StateManager.getCurrentSlide();
+         const settings = StateManager.getViewerSettings();
+         const sequence = slide?.sequence || [];
+
+         if (settings.enablePrevNext && sequence.length > 0) {
+             viewerNavContainer.style.display = 'flex';
+             StateManager.startSequence(); // Set index to 0
+             // Make all sequence items initially visible? Or apply initial visibility?
+             // Let's assume elements marked 'initiallyHidden' ARE hidden,
+             // and the sequence reveals them or interacts with them.
+             // Hide all elements *in the sequence* initially? Or respect initiallyHidden?
+             // Let's respect 'initiallyHidden'. The sequence steps will make them visible if needed.
+
+             // Highlight the first item? (Optional)
+             // highlightSequenceItem(sequence[0]);
+
+         } else {
+             viewerNavContainer.style.display = 'none';
+             StateManager.setCurrentSequenceIndex(-1); // Ensure sequence is inactive
+         }
+         updateNavUI();
+    }
+
+    function advanceSequenceAfterAction(elementId, actionType, preActionState) {
+         if (!isViewer || !StateManager.isSequenceActive()) return;
+
+         const currentSequenceIndex = StateManager.getCurrentSequenceIndex();
+         const sequence = StateManager.getSlideSequence();
+
+         // Record the action taken for potential undo
+         // The action recorded is *triggering* the element at the current index
+         const actionRecord = {
+            index: currentSequenceIndex,
+            elementId: elementId,
+            actionType: actionType, // 'panAndZoom', 'reveal', 'quiz', 'other', 'no_op'
+            preStateSnapshot: preActionState // State before *this* action occurred
+         };
+         StateManager.addActionToHistory(actionRecord);
+         console.log("Action recorded:", actionRecord);
+
+
+         // Move to the next step
+         const nextIndex = currentSequenceIndex + 1;
+         if (nextIndex < sequence.length) {
+             StateManager.setCurrentSequenceIndex(nextIndex);
+             console.log("Advanced sequence to index:", nextIndex);
+             // Optional: Automatically trigger the next action? Or wait for user click?
+             // Current design implies user clicks the next item.
+             // Optional: Highlight next item
+             // highlightSequenceItem(sequence[nextIndex]);
+         } else {
+             console.log("End of sequence reached.");
+             StateManager.setCurrentSequenceIndex(nextIndex); // Move index past the end
+             // Optional: Show completion message?
+         }
+         updateNavUI();
+    }
+
+    function executeNextStep() {
+        if (!isViewer || !StateManager.isSequenceActive()) return;
+
+        const currentSequenceIndex = StateManager.getCurrentSequenceIndex();
+        const sequence = StateManager.getSlideSequence();
+
+        if (currentSequenceIndex >= sequence.length -1 ) {
+            console.log("Already at or past the last step.");
+            return; // Cannot go further
+        }
+
+        const targetElementId = sequence[currentSequenceIndex + 1];
+        const targetElementData = StateManager.getElementData(targetElementId);
+        const targetFabricObject = CanvasController.getObjectById(targetElementId);
+
+        if (targetElementData && targetFabricObject) {
+             console.log("Executing next step (manual nav):", targetElementId);
+             // Execute action for the *next* item and advance state
+             executeActionForElement(targetElementData, targetFabricObject, true);
+        } else {
+             console.warn(`Element data or object not found for next sequence item: ${targetElementId}. Advancing anyway.`);
+             // If element is missing, still advance state but record a 'missing_element' action?
+              const preActionState = captureStateSnapshot(null); // No specific element state
+              advanceSequenceAfterAction(targetElementId, 'missing_element', preActionState);
+        }
+    }
+
+    function executePreviousStep() {
+         if (!isViewer || !StateManager.isSequenceActive()) return;
+
+         const history = StateManager.getActionHistory();
+         if (history.length === 0) {
+             console.log("No actions in history to undo.");
+             return; // Cannot go back further
+         }
+
+         const lastAction = StateManager.popActionFromHistory();
+         console.log("Executing previous step (undoing action):", lastAction);
+
+         // --- Revert State Based on lastAction.preStateSnapshot ---
+         // This is the core of the undo logic. It needs to reverse whatever the
+         // recorded action did, returning to the state *before* that action.
+
+         // Example: Revert viewport transform if action was pan/zoom
+         if (lastAction.preStateSnapshot?.viewportTransform) {
+              CanvasController.animateViewport(lastAction.preStateSnapshot.viewportTransform, 300);
+         }
+
+         // Example: Revert visibility changes if action was reveal/hide
+         // This requires the snapshot to contain visibility states of relevant elements.
+         if (lastAction.preStateSnapshot?.elementVisibility) {
+             Object.entries(lastAction.preStateSnapshot.elementVisibility).forEach(([id, isVisible]) => {
+                 const obj = CanvasController.getObjectById(id);
+                 if (obj) {
+                     // Animate fade? Or just set visibility?
+                     obj.visible = isVisible;
+                 }
+             });
+             CanvasController.getCanvas().requestRenderAll();
+         }
+
+          // Example: If the action was hiding the element itself (e.g., fadeOut animation target)
+         if (lastAction.preStateSnapshot?.elementItselfVisibility?.[lastAction.elementId] !== undefined) {
+             const selfObj = CanvasController.getObjectById(lastAction.elementId);
+             if (selfObj) {
+                 selfObj.visible = lastAction.preStateSnapshot.elementItselfVisibility[lastAction.elementId];
+                 // Reset opacity?
+                 selfObj.opacity = selfObj.appData?.style?.opacity ?? 1;
+                 CanvasController.getCanvas().requestRenderAll();
+             }
+         }
+
+          // IMPORTANT: Quiz Undo - As per plan, undoing a quiz trigger step simply reverts
+          // the state *before* the quiz modal was shown (e.g., viewport changes).
+          // It does *not* undo the quiz completion or allow re-taking. The actionHistory
+          // correctly reflects the trigger event, so reverting to the pre-trigger state is correct.
+
+         // Move the sequence index back
+         StateManager.setCurrentSequenceIndex(lastAction.index);
+
+         // Update UI (buttons will be re-enabled/disabled)
+         updateNavUI();
+
+          // Optional: Highlight the now-current item
+          // highlightSequenceItem(StateManager.getSlideSequence()[lastAction.index]);
+    }
+
+    function updateNavUI() {
+        if (!isViewer || !viewerNavContainer || viewerNavContainer.style.display === 'none') {
+            return; // Don't update if viewer or nav is hidden
+        }
+
+        const currentIndex = StateManager.getCurrentSequenceIndex();
+        const sequence = StateManager.getSlideSequence();
+        const historyLength = StateManager.getActionHistory().length;
+
+        // Previous Button State
+        prevButton.disabled = historyLength === 0;
+
+        // Next Button State
+        nextButton.disabled = currentIndex >= sequence.length - 1;
+
+        // Step Indicator Text
+        // Use history length for "current step number" as it reflects completed steps
+        const currentStepNum = historyLength;
+        const totalSteps = sequence.length;
+        stepIndicator.textContent = `Step ${currentStepNum} / ${totalSteps}`;
+    }
+
+    // --- Helper Functions ---
+
+    function flashElement(fabricObject, color = '#FBBC05', duration = 300) {
+        if (!fabricObject) return;
+        const originalFill = fabricObject.fill;
+        const originalStroke = fabricObject.stroke;
+        // Apply flash style
+        fabricObject.set({
+            fill: color, // Flash with specified color
+            // Or flash stroke?
+            // stroke: color,
+            // strokeWidth: (fabricObject.strokeWidth || 0) + 2
+        });
+        CanvasController.getCanvas().requestRenderAll();
+        // Revert after duration
+        setTimeout(() => {
+            fabricObject.set({
+                fill: originalFill,
+                // stroke: originalStroke,
+                // strokeWidth: fabricObject.strokeWidth ? fabricObject.strokeWidth - 2 : 0
+            });
+             CanvasController.getCanvas().requestRenderAll();
+        }, duration);
+    }
+
+    function calculateTargetViewport(targetX, targetY, targetZoom) {
+        // This needs refinement. How are targetX/Y defined?
+        // Are they center points in original image coords? Canvas coords?
+        // Assuming they are canvas coordinates for the desired center point.
+        const canvas = CanvasController.getCanvas();
+        const width = canvas.width;
+        const height = canvas.height;
+
+        // Calculate the translation needed to center targetX/Y in the viewport at the new zoom level
+        const newTranslateX = width / 2 - targetX * targetZoom;
+        const newTranslateY = height / 2 - targetY * targetZoom;
+
+        return [targetZoom, 0, 0, targetZoom, newTranslateX, newTranslateY];
+    }
+
+     // Function to capture relevant state before an action
+     function captureStateSnapshot(triggerElementId) {
+         const snapshot = {};
+         // 1. Capture current viewport transform
+         snapshot.viewportTransform = [...CanvasController.getViewportTransform()]; // Create copy
+
+         // 2. Capture visibility of elements involved in potential 'reveal' action
+         // (Requires knowing which elements *might* be affected - complex)
+         // Simple approach: capture visibility of *all* sequence elements? Or just neighbors?
+         // Or maybe only capture if the action *is* a reveal action?
+         // Let's capture visibility of the trigger element itself for simplicity now.
+         const triggerObj = triggerElementId ? CanvasController.getObjectById(triggerElementId) : null;
+         if (triggerObj) {
+             snapshot.elementItselfVisibility = { [triggerElementId]: triggerObj.visible };
+         }
+
+
+         // TODO: If 'full' undo mode is implemented, capture more state:
+         // - Visibility of all sequence elements?
+         // - Opacity/Style properties if they are animated?
+         // - Current state of any ongoing animations? (Very complex)
+
+         return snapshot;
+     }
+
+    // --- Public API ---
+    return {
+        init,
+        attachListenersToObject,
+        handleInteractionTrigger, // Might be called directly? (e.g. from next button)
+        applyInitialSequenceState, // Called by main.js or stateManager on load
+        updateNavUI, // Called by StateManager when index changes
+        executeNextStep, // Called by nav button
+        executePreviousStep // Called by nav button
+    };
+
+})();

@@ -1,0 +1,787 @@
+const EditorUI = (() => {
+
+    let propertiesPanelContainer;
+    let sequenceListContainer;
+    let sequenceSortableInstance = null; // To manage SortableJS instance
+    let slideListContainer;
+    let currentSlideBgFilenameDisplay;
+    let saveStatusDisplay;
+    let projectTitleDisplay;
+    let loadModal;
+    let loadProjectListContainer;
+
+
+    function _initDOMReferences() {
+        propertiesPanelContainer = document.getElementById('element-properties-content');
+        sequenceListContainer = document.getElementById('sequence-list');
+        slideListContainer = document.getElementById('slide-list');
+        currentSlideBgFilenameDisplay = document.getElementById('current-bg-filename');
+        saveStatusDisplay = document.getElementById('save-status');
+        projectTitleDisplay = document.getElementById('project-title-display');
+        loadModal = document.getElementById('load-project-modal');
+        loadProjectListContainer = document.getElementById('load-project-list');
+    }
+
+    function _initToolbar() {
+        Utils.listen('#new-button', 'click', handleNewProject);
+        Utils.listen('#save-button', 'click', handleSaveProject);
+        Utils.listen('#load-button', 'click', handleShowLoadModal);
+        Utils.listen('#add-rect-button', 'click', () => addShape('rect'));
+        Utils.listen('#add-ellipse-button', 'click', () => addShape('ellipse'));
+        Utils.listen('#add-text-button', 'click', () => addShape('textbox'));
+        Utils.listen('#delete-button', 'click', CanvasController.deleteSelectedObject);
+
+        // Add listener for project title editing? Maybe later.
+        // projectTitleDisplay.onclick = handleEditTitle;
+    }
+
+    function _initSidebarTabs() {
+        document.querySelectorAll('#sidebar-tabs .tab-link').forEach(button => {
+            Utils.listen(button, 'click', (e) => {
+                const targetTabId = e.target.dataset.tab;
+                // Deactivate all tabs and content
+                document.querySelectorAll('#sidebar-tabs .tab-link').forEach(btn => btn.classList.remove('active'));
+                document.querySelectorAll('#right-sidebar .sidebar-tab-content').forEach(content => content.classList.remove('active'));
+                // Activate the clicked tab and corresponding content
+                e.target.classList.add('active');
+                document.getElementById(targetTabId)?.classList.add('active');
+            });
+        });
+    }
+
+    function _initSlideNavigator() {
+        Utils.listen('#add-slide-button', 'click', handleAddSlide);
+        Utils.listen('#delete-slide-button', 'click', handleDeleteSlide);
+        Utils.listen('#upload-bg-button', 'click', () => document.getElementById('slide-bg-input').click());
+        Utils.listen('#slide-bg-input', 'change', handleBackgroundUpload);
+
+        updateSlideList();
+        updateSlideBackgroundDisplay();
+    }
+
+    function _initSequenceList() {
+         // Initialize SortableJS on the sequence list
+        if (sequenceListContainer) {
+            sequenceSortableInstance = new Sortable(sequenceListContainer, {
+                animation: 150, // ms, animation speed moving items when sorting, `0` — without animation
+                ghostClass: 'sortable-ghost', // Class name for the drop placeholder
+                dragClass: 'sortable-drag', // Class name for the dragging item
+                onEnd: (evt) => {
+                    // evt.oldIndex, evt.newIndex
+                    const sequence = Array.from(evt.to.children).map(item => item.dataset.elementId);
+                    StateManager.setSlideSequence(sequence);
+                    // No need to re-render manually unless state was modified elsewhere
+                },
+            });
+             updateSequenceList(); // Initial population
+        } else {
+            console.error("Sequence list container not found.");
+        }
+    }
+
+
+    // --- Event Handlers ---
+
+    function handleNewProject() {
+        if (StateManager.isDirty() && !confirm("You have unsaved changes. Are you sure you want to start a new project?")) {
+            return;
+        }
+        StateManager.init(true); // Re-initialize state for editor
+        CanvasController.loadSlide(StateManager.getCurrentSlide()); // Load the default slide
+        updateSlideList();
+        updateSequenceList();
+        updatePropertiesPanel(null); // Clear properties panel
+        updateProjectTitleDisplay();
+        updateSaveStatus(StateManager.isDirty());
+    }
+
+    async function handleSaveProject() {
+        const project = StateManager.getCurrentProject();
+        if (!project) return;
+        try {
+             // Ensure current canvas state (like active selection props) is saved before stringifying
+             const activeObj = CanvasController.getCanvas()?.getActiveObject();
+             if (activeObj) {
+                _savePropertiesFromUI(activeObj.id); // Force save current props if any are selected
+             }
+
+             const jsonString = StateManager.getProjectJsonString();
+             const result = await ServerClient.saveProject(jsonString, project.projectId, project.title);
+             StateManager.markAsSaved(result.projectId, result.lastModified); // Update state with new ID/status
+             Utils.showError("Project saved successfully!"); // Use error modal as temp success message
+             console.log("Project saved:", result);
+        } catch (error) {
+             console.error("Save failed:", error);
+             Utils.showError(`Save failed: ${error.message}`);
+             updateSaveStatus(true); // Still dirty if save failed
+        }
+    }
+
+    async function handleShowLoadModal() {
+         if (StateManager.isDirty() && !confirm("You have unsaved changes. Are you sure you want to load another project?")) {
+            return;
+        }
+        loadModal.classList.add('active');
+        loadProjectListContainer.innerHTML = '<p>Loading projects...</p>'; // Show loading state
+        try {
+            const projects = await ServerClient.listProjects();
+            renderLoadProjectList(projects);
+        } catch (error) {
+             console.error("Failed to list projects:", error);
+             loadProjectListContainer.innerHTML = `<p class="error-message">Error loading projects: ${error.message}</p>`;
+        }
+    }
+
+    function closeLoadModal() {
+        loadModal.classList.remove('active');
+    }
+
+    async function handleLoadProject(projectId) {
+        closeLoadModal();
+        if (!projectId) return;
+         Utils.showLoadingIndicator(true, 'Loading Project...');
+        try {
+            const jsonString = await ServerClient.loadProject(projectId);
+            if (StateManager.loadProjectData(jsonString)) {
+                // Load succeeded
+                 CanvasController.loadSlide(StateManager.getCurrentSlide());
+                 updateSlideList();
+                 updateSequenceList();
+                 updatePropertiesPanel(null);
+                 updateProjectTitleDisplay();
+                 updateSaveStatus(false); // Loaded project is clean
+            } else {
+                // loadProjectData showed error via Utils.showError
+            }
+        } catch (error) {
+            console.error("Load failed:", error);
+            Utils.showError(`Load failed: ${error.message}`);
+        } finally {
+             Utils.showLoadingIndicator(false);
+        }
+    }
+
+
+    function addShape(type) {
+        const slide = StateManager.getCurrentSlide();
+        if (!slide) return;
+
+        const elementData = {
+            type: type,
+            id: Utils.generateUUID(),
+            left: 50, top: 50, width: (type==='textbox'?150:100), height: (type==='textbox'?40:50), angle: 0,
+            nickname: `${type.charAt(0).toUpperCase() + type.slice(1)} ${slide.elements.length + 1}`,
+            initiallyHidden: false,
+             // Add default nested structures immediately
+             style: {
+                color: type === 'textbox' ? 'rgba(0,0,0,0)' : '#4285F4', // Transparent background for text, blue for shapes
+                opacity: 1,
+                outlineEnabled: false,
+                shadowEnabled: false,
+             },
+             text: type === 'textbox' ? {
+                 content: 'New Text',
+                 fontSize: 16,
+                 fill: '#333333' // Default text color
+             } : null,
+             interactions: {
+                 triggers: { onClick: false },
+                 features: {
+                     reveal: { enabled: false, targetIds: [] },
+                     spotlight: { enabled: false, type: 'circle' },
+                     panAndZoom: { enabled: false, targetX: 0, targetY: 0, targetZoom: 1.5 },
+                     quiz: { enabled: false, feedbackTiming: 'end', creatorEmail: '', questions: [] }
+                 }
+             }
+        };
+
+        StateManager.addElementData(elementData);
+        const fabricObject = CanvasController.addObject(elementData);
+        if (fabricObject) {
+            CanvasController.setActiveObject(fabricObject.id); // Select the new object
+        }
+         updateSequenceList(); // Update sequence panel if needed (though not in sequence yet)
+    }
+
+    function handleAddSlide() {
+        const newSlideId = StateManager.addSlide();
+        if (newSlideId) {
+            StateManager.setCurrentSlideId(newSlideId);
+            CanvasController.loadSlide(StateManager.getCurrentSlide());
+            updateSlideList(); // Update UI list
+            updateSequenceList(); // Clear sequence for new slide
+            updatePropertiesPanel(null); // Clear properties
+             updateSlideBackgroundDisplay(); // Update bg display
+        }
+    }
+
+    function handleDeleteSlide() {
+         const slideToDelete = StateManager.getCurrentSlide();
+         if (!slideToDelete) return;
+         if (confirm(`Are you sure you want to delete slide "${slideToDelete.title || slideToDelete.slideId}"? This cannot be undone.`)) {
+             const currentId = slideToDelete.slideId;
+             if (StateManager.deleteSlide(currentId)) {
+                 // Deletion successful, state manager already switched slide if needed
+                 const newCurrentSlide = StateManager.getCurrentSlide();
+                 CanvasController.loadSlide(newCurrentSlide);
+                 updateSlideList();
+                 updateSequenceList();
+                 updatePropertiesPanel(null);
+                 updateSlideBackgroundDisplay();
+             }
+             // Error message handled by StateManager if deletion fails
+         }
+    }
+
+    async function handleBackgroundUpload(event) {
+        const file = event.target.files[0];
+        if (!file || !file.type.startsWith('image/')) {
+            Utils.showError("Please select a valid image file.");
+            return;
+        }
+
+        Utils.showLoadingIndicator(true, 'Reading Image...');
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const dataUrl = e.target.result;
+            Utils.showLoadingIndicator(true, 'Uploading Image...'); // Switch message
+            try {
+                const result = await ServerClient.uploadImage(dataUrl, file.name);
+                await CanvasController.setBackgroundImage(result.fileId); // Let CanvasController handle setting and updating state
+                 updateSlideBackgroundDisplay(result.fileId, file.name);
+            } catch (error) {
+                 console.error("Background upload failed:", error);
+                 Utils.showError(`Background upload failed: ${error.message}`);
+            } finally {
+                Utils.showLoadingIndicator(false);
+                 event.target.value = null; // Reset file input
+            }
+        };
+        reader.onerror = (e) => {
+            Utils.showLoadingIndicator(false);
+            Utils.showError("Failed to read image file.");
+            event.target.value = null; // Reset file input
+        };
+        reader.readAsDataURL(file);
+    }
+
+
+    // --- UI Rendering ---
+
+    function renderLoadProjectList(projects) {
+         if (!projects || projects.length === 0) {
+             loadProjectListContainer.innerHTML = '<p>No projects found.</p>';
+             return;
+         }
+         const listHtml = `
+            <ul>
+                ${projects.map(p => `
+                    <li onclick="EditorUI.handleLoadProject('${p.id}')">
+                        <span class="project-title">${p.title || 'Untitled'}</span>
+                        <span class="project-date">Modified: ${new Date(p.lastModified).toLocaleDateString()}</span>
+                    </li>
+                `).join('')}
+            </ul>
+         `;
+         loadProjectListContainer.innerHTML = listHtml;
+    }
+
+    function updateSlideList() {
+         if (!slideListContainer) return;
+         const slides = StateManager.getSlides();
+         const currentId = StateManager.getCurrentSlideId();
+         slideListContainer.innerHTML = slides.map((slide, index) => `
+            <li data-slide-id="${slide.slideId}" class="${slide.slideId === currentId ? 'active' : ''}" onclick="EditorUI.selectSlide('${slide.slideId}')">
+                <!-- Add thumbnail later if possible -->
+                <!-- <img src="placeholder.png" class="thumbnail"> -->
+                <span>${index + 1}. ${slide.title || 'Untitled Slide'}</span>
+            </li>
+         `).join('');
+
+         // Enable/disable delete button
+         const deleteBtn = document.getElementById('delete-slide-button');
+         if(deleteBtn) deleteBtn.disabled = slides.length <= 1;
+    }
+
+    function updateSlideBackgroundDisplay(fileId = null, filename = null) {
+         if (!currentSlideBgFilenameDisplay) return;
+         const slide = StateManager.getCurrentSlide();
+         if (!slide) return;
+
+         const currentFileId = fileId ?? slide.imageFileId; // Use passed ID or state ID
+
+         if (currentFileId) {
+             // Attempt to get a filename if not provided
+             if (!filename) {
+                 // Maybe store filename in slide data? For now, use ID.
+                 filename = `Image ID: ${currentFileId}`;
+             }
+             currentSlideBgFilenameDisplay.textContent = filename;
+             currentSlideBgFilenameDisplay.title = filename; // Tooltip for long names
+         } else {
+            currentSlideBgFilenameDisplay.textContent = "No background image set";
+            currentSlideBgFilenameDisplay.title = "";
+         }
+    }
+
+    function selectSlide(slideId) {
+        if (slideId === StateManager.getCurrentSlideId()) return; // No change
+        StateManager.setCurrentSlideId(slideId);
+        CanvasController.loadSlide(StateManager.getCurrentSlide());
+        updateSlideList(); // Re-render list to show active state
+        updateSequenceList(); // Update sequence for the new slide
+        updatePropertiesPanel(null); // Clear properties panel
+        updateSlideBackgroundDisplay(); // Update background info display
+    }
+
+    function updateSequenceList() {
+        if (!sequenceListContainer) return;
+        const slide = StateManager.getCurrentSlide();
+        const sequence = slide?.sequence || [];
+        const elements = slide?.elements || [];
+
+        if (sequence.length === 0) {
+            sequenceListContainer.innerHTML = '<li class="placeholder-item">No elements in sequence. Add elements and enable interactions.</li>';
+            return;
+        }
+
+        sequenceListContainer.innerHTML = sequence.map(elementId => {
+            const element = elements.find(el => el.id === elementId);
+            const nickname = element?.nickname || elementId;
+            const type = element?.type || 'Unknown';
+             // Check if element actually exists - might be orphaned ID
+            if (!element) {
+                 return `<li data-element-id="${elementId}" class="orphaned">
+                            <span class="element-nickname">⚠ Orphaned ID: ${elementId}</span>
+                            <button class="remove-orphan-btn" onclick="EditorUI.removeOrphanFromSequence('${elementId}')">Remove</button>
+                        </li>`;
+            }
+            return `<li data-element-id="${elementId}">
+                        <span class="element-nickname">${nickname}</span>
+                        <span class="element-type">(${type})</span>
+                    </li>`;
+        }).join('');
+    }
+
+    function removeOrphanFromSequence(elementId) {
+        if (confirm(`Remove orphaned ID "${elementId}" from sequence?`)) {
+            const currentSequence = StateManager.getSlideSequence();
+            const newSequence = currentSequence.filter(id => id !== elementId);
+            StateManager.setSlideSequence(newSequence);
+            updateSequenceList(); // Re-render the list
+        }
+    }
+
+
+    function updatePropertiesPanel(fabricObject) {
+        if (!propertiesPanelContainer) return;
+
+        if (!fabricObject) {
+            propertiesPanelContainer.innerHTML = '<p class="placeholder-text">Select an element on the canvas to see its properties.</p>';
+            return;
+        }
+
+        // It's possible the underlying data hasn't been updated yet if the modification
+        // happened JUST now. Fetch fresh data from StateManager.
+        const elementData = StateManager.getElementData(fabricObject.id);
+        if (!elementData) {
+             propertiesPanelContainer.innerHTML = '<p class="error-message">Error: Could not find data for selected element.</p>';
+             return;
+        }
+
+        // --- Build HTML dynamically ---
+        let html = '';
+
+        // --- Identification ---
+        html += `<div class="prop-section"><h3>Identification</h3>`;
+        html += `<div class="form-group">
+                    <label for="prop-nickname">Nickname:</label>
+                    <input type="text" id="prop-nickname" value="${elementData.nickname || ''}">
+                 </div>`;
+         html += `<div class="form-group">
+                    <label>ID:</label>
+                    <input type="text" value="${elementData.id}" readonly disabled>
+                 </div>`;
+          html += `<div class="form-group">
+                    <label>Type:</label>
+                    <input type="text" value="${elementData.type}" readonly disabled>
+                 </div>`;
+        html += `</div>`;
+
+        // --- Position & Size ---
+        html += `<div class="prop-section"><h3>Transform</h3>`;
+        // Use current Fabric object values as they are most up-to-date during manipulation
+        html += `<div class="form-group-inline">
+                    <label for="prop-left">X:</label> <input type="number" id="prop-left" value="${fabricObject.left.toFixed(1)}" step="1">
+                    <label for="prop-top">Y:</label> <input type="number" id="prop-top" value="${fabricObject.top.toFixed(1)}" step="1">
+                 </div>`;
+        html += `<div class="form-group-inline">
+                     <label for="prop-width">W:</label> <input type="number" id="prop-width" value="${fabricObject.getScaledWidth().toFixed(1)}" step="1">
+                     <label for="prop-height">H:</label> <input type="number" id="prop-height" value="${fabricObject.getScaledHeight().toFixed(1)}" step="1">
+                 </div>`;
+         html += `<div class="form-group-inline">
+                    <label for="prop-angle">Angle:</label> <input type="number" id="prop-angle" value="${fabricObject.angle.toFixed(1)}" step="1">
+                  </div>`;
+        html += `</div>`;
+
+         // --- Style Section ---
+         html += `<div class="prop-section"><h3>Style</h3>`;
+         const style = elementData.style || {};
+          // Background Color (Fill) - Label depends on type
+         const fillColorLabel = elementData.type === 'textbox' ? 'Background Color' : 'Fill Color';
+         html += `<div class="form-group-inline">
+                     <label for="prop-style-color">${fillColorLabel}:</label>
+                     <input type="color" id="prop-style-color" value="${style.color || '#ffffff'}">
+                  </div>`;
+         html += `<div class="form-group">
+                     <label for="prop-style-opacity">Opacity (0-1):</label>
+                     <input type="number" id="prop-style-opacity" value="${style.opacity ?? 1.0}" step="0.1" min="0" max="1">
+                  </div>`;
+
+         // Outline (Stroke)
+         html += `<fieldset><legend>Outline</legend>`;
+          html += `<div class="form-group-inline">
+                     <input type="checkbox" id="prop-style-outlineEnabled" ${style.outlineEnabled ? 'checked' : ''}>
+                     <label for="prop-style-outlineEnabled">Enable Outline</label>
+                  </div>`;
+         html += `<div class="form-group-inline">
+                    <label for="prop-style-outlineColor">Color:</label> <input type="color" id="prop-style-outlineColor" value="${style.outlineColor || '#000000'}" ${!style.outlineEnabled ? 'disabled' : ''}>
+                 </div>`;
+         html += `<div class="form-group-inline">
+                     <label for="prop-style-outlineWidth">Width:</label> <input type="number" id="prop-style-outlineWidth" value="${style.outlineWidth || 1}" min="1" step="1" ${!style.outlineEnabled ? 'disabled' : ''}>
+                 </div>`;
+          // Outline Style (Solid, Dashed, Dotted) - Add later if needed
+         html += `</fieldset>`;
+
+         // Shadow
+          html += `<fieldset><legend>Shadow</legend>`;
+          html += `<div class="form-group-inline">
+                     <input type="checkbox" id="prop-style-shadowEnabled" ${style.shadowEnabled ? 'checked' : ''}>
+                     <label for="prop-style-shadowEnabled">Enable Shadow</label>
+                  </div>`;
+          html += `<div class="form-group-inline">
+                    <label for="prop-style-shadowColor">Color:</label> <input type="color" id="prop-style-shadowColor" value="${style.shadowColor || '#000000'}" ${!style.shadowEnabled ? 'disabled' : ''}>
+                 </div>`;
+           html += `<div class="form-group-inline">
+                    <label for="prop-style-shadowBlur">Blur:</label> <input type="number" id="prop-style-shadowBlur" value="${style.shadowBlur || 5}" min="0" step="1" ${!style.shadowEnabled ? 'disabled' : ''}>
+                 </div>`;
+           html += `<div class="form-group-inline">
+                     <label for="prop-style-shadowOffsetX">Offset X:</label> <input type="number" id="prop-style-shadowOffsetX" value="${style.shadowOffsetX || 0}" step="1" ${!style.shadowEnabled ? 'disabled' : ''}>
+                     <label for="prop-style-shadowOffsetY">Y:</label> <input type="number" id="prop-style-shadowOffsetY" value="${style.shadowOffsetY || 0}" step="1" ${!style.shadowEnabled ? 'disabled' : ''}>
+                  </div>`;
+         html += `</fieldset>`;
+         html += `</div>`; // End Style Section
+
+         // --- Text Properties (Only for Textbox) ---
+         if (elementData.type === 'textbox') {
+             html += `<div class="prop-section"><h3>Text Properties</h3>`;
+             const text = elementData.text || {};
+              html += `<div class="form-group">
+                         <label for="prop-text-content">Content:</label>
+                         <textarea id="prop-text-content">${text.content || ''}</textarea>
+                      </div>`;
+             html += `<div class="form-group-inline">
+                        <label for="prop-text-fontSize">Size:</label> <input type="number" id="prop-text-fontSize" value="${text.fontSize || 16}" min="1">
+                        <label for="prop-text-fill">Color:</label> <input type="color" id="prop-text-fill" value="${text.fill || '#333333'}">
+                     </div>`;
+             // Add controls for bold, italic, alignment etc. later
+             html += `</div>`;
+         }
+
+         // --- Interactions Section ---
+         html += `<div class="prop-section"><h3>Interactions</h3>`;
+         const interactions = elementData.interactions || { triggers:{}, features:{} };
+         const triggers = interactions.triggers || {};
+         const features = interactions.features || {};
+         // Default features if they don't exist
+         features.reveal = features.reveal || { enabled: false };
+         features.spotlight = features.spotlight || { enabled: false };
+         features.panAndZoom = features.panAndZoom || { enabled: false };
+         features.quiz = features.quiz || { enabled: false, questions: [], feedbackTiming: 'end' };
+
+
+         html += `<fieldset><legend>Triggers</legend>`;
+         html += `<div class="form-group-inline">
+                    <input type="checkbox" id="prop-trigger-onClick" ${triggers.onClick ? 'checked' : ''}>
+                    <label for="prop-trigger-onClick">Trigger on Click</label>
+                 </div>`;
+         // Add other triggers later (onHover?)
+         html += `</fieldset>`;
+
+         html += `<fieldset><legend>Features (Activated by Triggers)</legend>`;
+         // Reveal Feature
+         html += `<div class="form-group-inline">
+                     <input type="checkbox" id="prop-feature-revealEnabled" ${features.reveal.enabled ? 'checked' : ''}>
+                     <label for="prop-feature-revealEnabled">Reveal/Hide Other Elements</label>
+                  </div>`;
+          // TODO: Add multi-select for reveal targetIds when enabled
+
+         // Spotlight Feature
+         html += `<div class="form-group-inline">
+                     <input type="checkbox" id="prop-feature-spotlightEnabled" ${features.spotlight.enabled ? 'checked' : ''}>
+                     <label for="prop-feature-spotlightEnabled">Spotlight This Element</label>
+                  </div>`;
+          // TODO: Add options for spotlight type (circle, rect) when enabled
+
+          // Pan & Zoom Feature
+          html += `<div class="form-group-inline">
+                     <input type="checkbox" id="prop-feature-panZoomEnabled" ${features.panAndZoom.enabled ? 'checked' : ''}>
+                     <label for="prop-feature-panZoomEnabled">Pan & Zoom Viewport</label>
+                  </div>`;
+           // TODO: Add inputs for targetX, targetY, targetZoom when enabled
+
+           // Quiz Feature
+           html += `<hr style="margin: 15px 0;">`; // Separator
+           html += `<h4>Quiz</h4>`;
+           html += `<div class="form-group-inline">
+                     <input type="checkbox" id="prop-feature-quizEnabled" ${features.quiz.enabled ? 'checked' : ''}>
+                     <label for="prop-feature-quizEnabled">Trigger Quiz</label>
+                  </div>`;
+           // Quiz config - only show if quiz is enabled
+           html += `<div id="quiz-config-section" class="${features.quiz.enabled ? '' : 'hidden'}">`;
+            html += `<div class="form-group">
+                        <label for="prop-quiz-feedbackTiming">Feedback Timing:</label>
+                        <select id="prop-quiz-feedbackTiming">
+                            <option value="none" ${features.quiz.feedbackTiming === 'none' ? 'selected' : ''}>None</option>
+                            <option value="each" ${features.quiz.feedbackTiming === 'each' ? 'selected' : ''}>After Each Question</option>
+                            <option value="end" ${features.quiz.feedbackTiming === 'end' ? 'selected' : ''}>At End of Quiz</option>
+                            <option value="emailUser" ${features.quiz.feedbackTiming === 'emailUser' ? 'selected' : ''}>Email Results to User</option>
+                            <option value="emailCreator" ${features.quiz.feedbackTiming === 'emailCreator' ? 'selected' : ''}>Email Results to Creator</option>
+                        </select>
+                     </div>`;
+            html += `<div class="form-group ${features.quiz.feedbackTiming === 'emailCreator' ? '' : 'hidden'}" id="quiz-creator-email-group">
+                         <label for="prop-quiz-creatorEmail">Creator Email:</label>
+                         <input type="email" id="prop-quiz-creatorEmail" value="${features.quiz.creatorEmail || ''}" placeholder="instructor@example.com">
+                      </div>`;
+            html += `<button id="edit-quiz-content-button">Edit Quiz Content (${features.quiz.questions?.length || 0} Qs)</button>`;
+           html += `</div>`; // End quiz-config-section
+
+         html += `</fieldset>`; // End Features
+         html += `</div>`; // End Interactions Section
+
+
+          // --- Visibility ---
+          html += `<div class="prop-section"><h3>Initial State</h3>`;
+           html += `<div class="form-group-inline">
+                     <input type="checkbox" id="prop-initiallyHidden" ${elementData.initiallyHidden ? 'checked' : ''}>
+                     <label for="prop-initiallyHidden">Hide element when slide loads?</label>
+                  </div>`;
+          html += `</div>`;
+
+        propertiesPanelContainer.innerHTML = html;
+
+        // --- Attach Listeners ---
+        _attachPropertiesPanelListeners(elementData.id);
+    }
+
+    function _attachPropertiesPanelListeners(elementId) {
+         // Use event delegation? Or direct listeners? Direct might be simpler here.
+         // Debounce input listeners to avoid excessive updates
+         const debounceRate = 300; // ms
+         const debouncedSave = Utils.debounce(() => _savePropertiesFromUI(elementId), debounceRate);
+
+         // Identification
+         Utils.listen('#prop-nickname', 'input', debouncedSave);
+
+         // Transform
+         Utils.listen('#prop-left', 'input', debouncedSave);
+         Utils.listen('#prop-top', 'input', debouncedSave);
+         Utils.listen('#prop-width', 'input', debouncedSave);
+         Utils.listen('#prop-height', 'input', debouncedSave);
+         Utils.listen('#prop-angle', 'input', debouncedSave);
+
+         // Style
+         Utils.listen('#prop-style-color', 'input', debouncedSave);
+         Utils.listen('#prop-style-opacity', 'input', debouncedSave);
+         // Outline
+         Utils.listen('#prop-style-outlineEnabled', 'change', () => { _toggleFieldsetEnable('#prop-style-outlineEnabled', ['#prop-style-outlineColor', '#prop-style-outlineWidth']); debouncedSave(); });
+         Utils.listen('#prop-style-outlineColor', 'input', debouncedSave);
+         Utils.listen('#prop-style-outlineWidth', 'input', debouncedSave);
+         // Shadow
+          Utils.listen('#prop-style-shadowEnabled', 'change', () => { _toggleFieldsetEnable('#prop-style-shadowEnabled', ['#prop-style-shadowColor', '#prop-style-shadowBlur', '#prop-style-shadowOffsetX', '#prop-style-shadowOffsetY']); debouncedSave(); });
+         Utils.listen('#prop-style-shadowColor', 'input', debouncedSave);
+         Utils.listen('#prop-style-shadowBlur', 'input', debouncedSave);
+         Utils.listen('#prop-style-shadowOffsetX', 'input', debouncedSave);
+         Utils.listen('#prop-style-shadowOffsetY', 'input', debouncedSave);
+
+         // Text (if exists)
+          if (document.getElementById('prop-text-content')) {
+              Utils.listen('#prop-text-content', 'input', debouncedSave);
+              Utils.listen('#prop-text-fontSize', 'input', debouncedSave);
+              Utils.listen('#prop-text-fill', 'input', debouncedSave);
+          }
+
+          // Interactions
+          Utils.listen('#prop-trigger-onClick', 'change', debouncedSave);
+          // Features
+          Utils.listen('#prop-feature-revealEnabled', 'change', debouncedSave);
+          Utils.listen('#prop-feature-spotlightEnabled', 'change', debouncedSave);
+          Utils.listen('#prop-feature-panZoomEnabled', 'change', debouncedSave);
+          // Quiz Feature specific
+           Utils.listen('#prop-feature-quizEnabled', 'change', (e) => {
+                document.getElementById('quiz-config-section')?.classList.toggle('hidden', !e.target.checked);
+                debouncedSave();
+                updateSequenceList(); // Re-render sequence as quiz status affects display? maybe later
+           });
+          Utils.listen('#prop-quiz-feedbackTiming', 'change', (e) => {
+               document.getElementById('quiz-creator-email-group')?.classList.toggle('hidden', e.target.value !== 'emailCreator');
+               debouncedSave();
+          });
+          Utils.listen('#prop-quiz-creatorEmail', 'input', debouncedSave);
+          Utils.listen('#edit-quiz-content-button', 'click', () => {
+                const data = StateManager.getElementData(elementId);
+                if (data && data.interactions?.features?.quiz) {
+                    QuizEditor.open(data.interactions.features.quiz, elementId); // Pass quiz data and element ID
+                }
+          });
+
+          // Initial State
+          Utils.listen('#prop-initiallyHidden', 'change', debouncedSave);
+    }
+
+    // Helper to enable/disable fields based on a checkbox
+     function _toggleFieldsetEnable(checkboxSelector, fieldsToToggleSelectors) {
+        const isChecked = document.querySelector(checkboxSelector)?.checked;
+        fieldsToToggleSelectors.forEach(selector => {
+            const field = document.querySelector(selector);
+            if (field) field.disabled = !isChecked;
+        });
+     }
+
+
+    function _savePropertiesFromUI(elementId) {
+         const elementData = StateManager.getElementData(elementId); // Get current data
+         if (!elementData) return; // Should not happen if panel is visible
+
+         const updates = {
+             nickname: document.getElementById('prop-nickname')?.value || elementData.nickname,
+             // Transform properties are read directly from Fabric object during modification,
+             // but we read them back from UI inputs here for consistency or manual edits.
+             left: parseFloat(document.getElementById('prop-left')?.value || elementData.left),
+             top: parseFloat(document.getElementById('prop-top')?.value || elementData.top),
+             width: parseFloat(document.getElementById('prop-width')?.value || elementData.width),
+             height: parseFloat(document.getElementById('prop-height')?.value || elementData.height),
+             angle: parseFloat(document.getElementById('prop-angle')?.value || elementData.angle),
+             initiallyHidden: document.getElementById('prop-initiallyHidden')?.checked || false,
+             // Nested objects need careful handling - update the whole object or merge?
+             // Let's rebuild the nested objects from the UI state.
+             style: {
+                color: document.getElementById('prop-style-color')?.value || '#FFFFFF',
+                opacity: parseFloat(document.getElementById('prop-style-opacity')?.value ?? 1.0),
+                outlineEnabled: document.getElementById('prop-style-outlineEnabled')?.checked || false,
+                outlineColor: document.getElementById('prop-style-outlineColor')?.value || '#000000',
+                outlineWidth: parseInt(document.getElementById('prop-style-outlineWidth')?.value || 1),
+                // outlineStyle: ..., // Add later
+                shadowEnabled: document.getElementById('prop-style-shadowEnabled')?.checked || false,
+                shadowColor: document.getElementById('prop-style-shadowColor')?.value || '#000000',
+                shadowBlur: parseInt(document.getElementById('prop-style-shadowBlur')?.value || 5),
+                shadowOffsetX: parseInt(document.getElementById('prop-style-shadowOffsetX')?.value || 0),
+                shadowOffsetY: parseInt(document.getElementById('prop-style-shadowOffsetY')?.value || 0),
+             },
+              text: elementData.type === 'textbox' ? {
+                 content: document.getElementById('prop-text-content')?.value || '',
+                 fontSize: parseInt(document.getElementById('prop-text-fontSize')?.value || 16),
+                 fill: document.getElementById('prop-text-fill')?.value || '#333333',
+                 // Add other text props later (bold, italic etc.)
+              } : elementData.text, // Keep existing text null if not textbox
+              interactions: {
+                  triggers: {
+                      onClick: document.getElementById('prop-trigger-onClick')?.checked || false,
+                  },
+                  features: {
+                      reveal: {
+                         enabled: document.getElementById('prop-feature-revealEnabled')?.checked || false,
+                         // targetIds: ... // Get from multi-select later
+                      },
+                      spotlight: {
+                         enabled: document.getElementById('prop-feature-spotlightEnabled')?.checked || false,
+                         // type: ... // Get from dropdown later
+                      },
+                      panAndZoom: {
+                         enabled: document.getElementById('prop-feature-panZoomEnabled')?.checked || false,
+                          // targetX: ..., targetY: ..., targetZoom: ... // Get from inputs later
+                      },
+                       quiz: { // Keep existing quiz questions, only update settings from panel
+                          ...elementData.interactions?.features?.quiz, // Preserve questions array etc.
+                          enabled: document.getElementById('prop-feature-quizEnabled')?.checked || false,
+                          feedbackTiming: document.getElementById('prop-quiz-feedbackTiming')?.value || 'end',
+                          creatorEmail: document.getElementById('prop-quiz-creatorEmail')?.value || '',
+                      }
+                  }
+              }
+         };
+
+         // Apply these updates back to the StateManager
+         StateManager.updateElementData(elementId, updates);
+
+         // Also update the Fabric object to reflect the changes immediately
+         CanvasController.updateObjectFromData(elementId);
+
+         // Update sequence list potentially (if nickname changed)
+         updateSequenceList();
+         // Update quiz button text if quiz enabled/disabled
+         const quizButton = document.getElementById('edit-quiz-content-button');
+         if (quizButton) {
+              const qCount = updates.interactions.features.quiz.questions?.length || 0;
+               quizButton.textContent = `Edit Quiz Content (${qCount} Qs)`;
+         }
+    }
+
+
+    function updateToolbarState(isObjectSelected) {
+        const deleteBtn = document.getElementById('delete-button');
+        if (deleteBtn) {
+            deleteBtn.disabled = !isObjectSelected;
+        }
+        // Add logic for other buttons (e.g., group/ungroup) later
+    }
+
+    function updateSaveStatus(isDirty, lastModified = null) {
+        if (!saveStatusDisplay) return;
+        if (isDirty) {
+            saveStatusDisplay.textContent = '* Unsaved Changes';
+            saveStatusDisplay.style.color = 'orange';
+        } else {
+             const timestamp = lastModified ? `Saved: ${new Date(lastModified).toLocaleTimeString()}` : 'Saved';
+             saveStatusDisplay.textContent = timestamp;
+             saveStatusDisplay.style.color = 'var(--secondary-color)'; // Green
+        }
+    }
+
+    function updateProjectTitleDisplay() {
+        if (projectTitleDisplay) {
+             projectTitleDisplay.textContent = StateManager.getProjectTitle() || 'Untitled Project';
+             // Optionally add ID if it exists:
+             // const projId = StateManager.getProjectId();
+             // if (projId) projectTitleDisplay.textContent += ` (${projId.substring(0, 6)}...)`;
+        }
+    }
+
+    // --- Public API ---
+    return {
+      initEditorUI() {
+        _initDOMReferences();
+        _initToolbar();
+        _initSidebarTabs();
+        _initSlideNavigator();
+        _initSequenceList();
+        updatePropertiesPanel(null); // Initial state (no selection)
+        updateToolbarState(false);
+        updateProjectTitleDisplay();
+        updateSaveStatus(StateManager.isDirty()); // Initial save status
+        console.log("Editor UI Initialized.");
+      },
+      updatePropertiesPanel, // Expose for CanvasController
+      updateSequenceList,    // Expose for StateManager changes if needed
+      updateSlideList,       // Expose for StateManager changes
+      updateSlideBackgroundDisplay, // Expose for CanvasController
+      updateToolbarState, // Expose for CanvasController selection
+      updateSaveStatus, // Expose for StateManager/ServerClient
+      updateProjectTitleDisplay, // Expose for StateManager
+      selectSlide, // Allow selecting slide programmatically if needed
+      handleLoadProject, // Allow triggering load from modal list
+      closeLoadModal, // Allow closing modal
+      removeOrphanFromSequence // Expose for button click
+    };
+
+})();

@@ -1,0 +1,62 @@
+// Global initialization function called from HTML body script tag
+async function initializeApp(view, projectId = null) {
+    console.log(`Initializing App - View: ${view}, ProjectID: ${projectId}`);
+    Utils.showLoadingIndicator(true, view === 'editor' ? 'Initializing Editor...' : 'Loading Training...');
+
+    try {
+        // Initialize Core Modules
+        StateManager.init(view === 'editor'); // Pass mode to init
+        InteractionHandler.init(view); // Initialize interaction handler for the view
+
+        if (view === 'editor') {
+            // Editor Initialization
+            CanvasController.initCanvas('editor-canvas', true); // Editor mode = true
+            QuizEditor.initEditorUI(); // Initialize editor-specific UI elements AFTER canvas
+            InteractionHandler.applyInitialSequenceState(); // Apply sequence state to initial view
+            Utils.showLoadingIndicator(false); // Hide indicator after basic setup
+            console.log("Editor Initialized.");
+        } else if (view === 'viewer' && projectId) {
+            // Viewer Initialization
+            CanvasController.initCanvas('viewer-canvas', false); // Editor mode = false
+            QuizPlayer; // Ensure QuizPlayer module is evaluated (listeners attached in its _init)
+
+            // Load Project Data
+            const jsonString = await ServerClient.loadProject(projectId);
+            if (StateManager.loadProjectData(jsonString)) {
+                // Project loaded successfully
+                CanvasController.loadSlide(StateManager.getCurrentSlide()); // Load the first slide
+                InteractionHandler.applyInitialSequenceState(); // Setup sequence navigation AFTER slide load
+                console.log("Viewer Initialized and Project Loaded.");
+            } else {
+                 // StateManager.loadProjectData would have shown an error via Utils.showError
+                 throw new Error("Failed to load project data."); // Throw to be caught below
+            }
+             Utils.showLoadingIndicator(false);
+        } else if (view === 'viewer') {
+             throw new Error("Project ID is missing for viewer mode.");
+        } else {
+            throw new Error(`Unknown application view: ${view}`);
+        }
+
+    } catch (error) {
+        console.error("Initialization failed:", error);
+        Utils.showError(`Failed to initialize application: ${error.message}`);
+        Utils.showLoadingIndicator(false); // Ensure loading is hidden on error
+         // Maybe show a more permanent error message on the page?
+         document.body.innerHTML = `<div class="error-page"><h1>Initialization Error</h1><p>${error.message}</p></div>`;
+         <?!= HtmlService.createHtmlOutputFromFile('css/styles').getContent(); ?> // Load styles for error page
+    }
+}
+
+// Optional: Add beforeunload listener for editor to warn about unsaved changes
+window.addEventListener('beforeunload', (event) => {
+    // Check if the current view is 'editor' (this requires a way to know the view mode globally)
+    // A simple check: presence of editor-specific elements
+    const isEditorView = !!document.getElementById('editor-canvas');
+
+    if (isEditorView && StateManager.isDirty()) {
+        const confirmationMessage = 'You have unsaved changes. Are you sure you want to leave?';
+        event.returnValue = confirmationMessage; // Standard for most browsers
+        return confirmationMessage; // For older browsers
+    }
+});
