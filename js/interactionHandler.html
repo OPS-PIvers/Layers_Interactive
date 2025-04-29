@@ -15,6 +15,26 @@ const InteractionHandler = (() => {
             Utils.listen(nextButton, 'click', executeNextStep);
         }
     }
+    
+    // Setup sequence for the current slide
+    function setupSequence() {
+        if (!isViewer) return;
+        
+        console.log("Setting up interaction sequence");
+        applyInitialSequenceState();
+        
+        // Check if we have a sequence on this slide
+        const slide = StateManager.getCurrentSlide();
+        const sequence = slide?.sequence || [];
+        
+        if (sequence.length > 0) {
+            console.log(`Sequence found with ${sequence.length} steps`);
+            // Update UI and start the sequence
+            updateNavUI();
+        } else {
+            console.log("No sequence found for this slide");
+        }
+    }
 
     function attachListenersToObject(fabricObject) {
         if (!fabricObject) return;
@@ -219,9 +239,11 @@ const InteractionHandler = (() => {
         const totalSteps = StateManager.getCurrentSequence().length;
         if (currentIndex >= totalSteps - 1) return;
 
-        const nextSnapshot = history[currentIndex + 1];
+        // Get history from StateManager instead of using undefined variable
+        const actionHistory = StateManager.getActionHistory();
+        const nextSnapshot = actionHistory[currentIndex + 1];
         if (nextSnapshot) {
-            if (restoreFromSnapshot(nextSnapshot)) {
+            if (restoreFromSnapshot(nextSnapshot.preStateSnapshot)) {
                 StateManager.setCurrentSequenceIndex(currentIndex + 1);
                 updateNavUI();
             }
@@ -232,9 +254,11 @@ const InteractionHandler = (() => {
         const currentIndex = StateManager.getCurrentSequenceIndex();
         if (currentIndex <= 0) return;
 
-        const previousSnapshot = history[currentIndex - 1];
+        // Get history from StateManager instead of using undefined variable
+        const actionHistory = StateManager.getActionHistory();
+        const previousSnapshot = actionHistory[currentIndex - 1];
         if (previousSnapshot) {
-            if (restoreFromSnapshot(previousSnapshot)) {
+            if (restoreFromSnapshot(previousSnapshot.preStateSnapshot)) {
                 StateManager.setCurrentSequenceIndex(currentIndex - 1);
                 updateNavUI();
             }
@@ -260,9 +284,9 @@ const InteractionHandler = (() => {
             }
         }
 
-        // Update navigation buttons state
-        const prevButton = document.getElementById('prev-step');
-        const nextButton = document.getElementById('next-step');
+        // Update navigation buttons state - fix IDs to match Viewer.html
+        const prevButton = document.getElementById('prev-step-button');
+        const nextButton = document.getElementById('next-step-button');
         
         if (prevButton) {
             prevButton.disabled = currentStepDisplay <= 1;
@@ -444,7 +468,8 @@ const InteractionHandler = (() => {
         applyInitialSequenceState, // Called by main.js or stateManager on load
         updateNavUI, // Called by StateManager when index changes
         executeNextStep, // Called by nav button
-        executePreviousStep // Called by nav button
+        executePreviousStep, // Called by nav button
+        setupSequence // Added setupSequence to the public API
     };
 
 })();

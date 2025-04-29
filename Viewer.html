@@ -94,14 +94,17 @@
   <script>
     // Initialize the viewer application once the DOM is ready
     document.addEventListener('DOMContentLoaded', () => {
-      // Extract projectId from the template variable passed by Code.gs
-      const projectId = <?!= projectId ? JSON.stringify(projectId) : 'null' ?>;
+      // Extract projectId from the template variable - using a safer method
+      // that avoids Expression expected errors
+      var projectIdObj = JSON.parse('<?!= projectId ? JSON.stringify(projectId) : "null" ?>');
+      var projectId = projectIdObj;
+      
       if (projectId) {
         initializeApp('viewer', projectId);
       } else {
          // Handle case where projectId is missing - Show an error message directly
          document.body.innerHTML = '<div class="error-page"><h1>Error</h1><p>No Project ID provided. Cannot load training.</p></div>';
-         <?!= HtmlService.createHtmlOutputFromFile('css/styles').getContent(); ?> // Load styles for error page
+         // CSS is already loaded in the head section, no need to add it again
       }
     });
   </script>

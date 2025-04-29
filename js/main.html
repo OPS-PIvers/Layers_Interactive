@@ -4,9 +4,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let initAttempts = 0;
     const maxAttempts = 5;
     
-    function initializeApp(mode) {
+    function initializeApp(mode, projectId) {
         try {
-            console.log(`Initializing app in ${mode || 'default'} mode`);
+            console.log(`Initializing app in ${mode || 'default'} mode${projectId ? ' with project: ' + projectId : ''}`);
             // Check for required DOM elements
             const editorCanvas = document.getElementById('editor-canvas');
             const viewerCanvas = document.getElementById('viewer-canvas');
@@ -48,14 +48,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 CanvasController.initCanvas('viewer-canvas', false);
                 InteractionHandler.init('viewer'); // Initialize viewer interaction handling
                 QuizPlayer.init(); // Initialize quiz playing capabilities
+                
+                // Load project if projectId is provided
+                if (projectId) {
+                    loadViewerProject(projectId);
+                }
             } else {
                 throw new Error("Could not determine application mode");
             }
 
-            // Load initial content if available
-            const initialData = window.INITIAL_DATA || null;
-            if (initialData) {
-                StateManager.loadProject(initialData);
+            // Load initial content if available (for editor)
+            if (!projectId && mode === 'editor') {
+                const initialData = window.INITIAL_DATA || null;
+                if (initialData) {
+                    StateManager.loadProject(initialData);
+                }
             }
 
             console.log('Application initialized successfully');
@@ -66,10 +73,38 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (initAttempts < maxAttempts) {
                 console.log(`Retrying initialization in 100ms (attempt ${initAttempts}/${maxAttempts})`);
-                setTimeout(() => initializeApp(mode), 100);
+                setTimeout(() => initializeApp(mode, projectId), 100);
             } else {
                 Utils.showError('Failed to initialize application. Please refresh the page.');
             }
+        }
+    }
+
+    // Function to load a project for the viewer
+    async function loadViewerProject(projectId) {
+        console.log("Loading project for viewer:", projectId);
+        Utils.showLoadingIndicator(true, 'Loading Project...');
+        
+        try {
+            const jsonString = await ServerClient.loadProject(projectId);
+            if (StateManager.loadProjectData(jsonString)) {
+                // Load the first slide
+                const slide = StateManager.getCurrentSlide();
+                if (slide) {
+                    CanvasController.loadSlide(slide);
+                    console.log("Project loaded successfully in viewer mode");
+                    
+                    // Set up sequence if available
+                    InteractionHandler.setupSequence();
+                }
+            } else {
+                throw new Error("Failed to load project data");
+            }
+        } catch (error) {
+            console.error("Failed to load project:", error);
+            Utils.showError(`Failed to load project: ${error.message}`);
+        } finally {
+            Utils.showLoadingIndicator(false);
         }
     }
 

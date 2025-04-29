@@ -236,6 +236,10 @@ const StateManager = (() => {
         return sequenceActive;
     }
 
+    function getSlideSequence() {
+        return getCurrentSlide()?.sequence || [];
+    }
+
     function setSlideSequence(sequence) {
         const slide = getCurrentSlide();
         if (!slide) return false;
@@ -344,6 +348,7 @@ const StateManager = (() => {
         startSequence,
         stopSequence,
         isSequenceActive,
+        getSlideSequence,
         setSlideSequence,
         addActionToHistory,
         getActionHistory,
