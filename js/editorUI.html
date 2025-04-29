@@ -1,5 +1,88 @@
 <script>
 const EditorUI = (() => {
+    let domRefs = {};
+    let initAttempts = 0;
+    const maxAttempts = 5;
+
+    function init() {
+        return new Promise((resolve, reject) => {
+            try {
+                initializeDOMReferences();
+                initializeEventListeners();
+                resolve();
+            } catch (error) {
+                console.error('EditorUI initialization error:', error);
+                initAttempts++;
+                
+                if (initAttempts < maxAttempts) {
+                    console.log(`Retrying EditorUI initialization in 100ms (attempt ${initAttempts}/${maxAttempts})`);
+                    setTimeout(() => init().then(resolve).catch(reject), 100);
+                } else {
+                    reject(new Error('Failed to initialize EditorUI after multiple attempts'));
+                }
+            }
+        });
+    }
+
+    function initializeDOMReferences() {
+        // Define all required DOM elements
+        const required = {
+            propertiesPanel: 'properties-panel',
+            toolbar: 'toolbar',
+            slideList: 'slide-list',
+            sequenceList: 'sequence-list',
+            addSlideBtn: 'add-slide-button',
+            deleteSlideBtn: 'delete-slide-button',
+            saveBtn: 'save-button',
+            undoBtn: 'undo-button',
+            redoBtn: 'redo-button'
+        };
+
+        // Verify all required elements exist
+        const missing = [];
+        domRefs = {};
+
+        for (const [key, id] of Object.entries(required)) {
+            const element = document.getElementById(id);
+            if (!element) {
+                missing.push(id);
+            } else {
+                domRefs[key] = element;
+            }
+        }
+
+        if (missing.length > 0) {
+            throw new Error(`Missing required DOM elements: ${missing.join(', ')}`);
+        }
+    }
+
+    function initializeEventListeners() {
+        // Only attach listeners if we have valid DOM references
+        if (!domRefs.addSlideBtn || !domRefs.deleteSlideBtn || !domRefs.saveBtn) {
+            throw new Error('Cannot initialize event listeners: missing DOM references');
+        }
+
+        // Attach event listeners with error handling
+        try {
+            domRefs.addSlideBtn.addEventListener('click', handleAddSlide);
+            domRefs.deleteSlideBtn.addEventListener('click', handleDeleteSlide);
+            domRefs.saveBtn.addEventListener('click', handleSave);
+            
+            // Add undo/redo handlers
+            if (domRefs.undoBtn && domRefs.redoBtn) {
+                domRefs.undoBtn.addEventListener('click', handleUndo);
+                domRefs.redoBtn.addEventListener('click', handleRedo);
+            }
+
+            // Initialize drag-drop for sequence list
+            if (domRefs.sequenceList) {
+                initializeSequenceListSorting();
+            }
+        } catch (error) {
+            console.error('Error attaching event listeners:', error);
+            throw error;
+        }
+    }
 
     let propertiesPanelContainer;
     let sequenceListContainer;
@@ -407,204 +490,30 @@ const EditorUI = (() => {
 
 
     function updatePropertiesPanel(fabricObject) {
-        if (!propertiesPanelContainer) return;
+        if (!domRefs.propertiesPanel) return;
+        
+        try {
+            // Clear existing panel content
+            domRefs.propertiesPanel.innerHTML = '';
+            
+            if (!fabricObject) {
+                domRefs.propertiesPanel.innerHTML = '<p class="no-selection">No element selected</p>';
+                return;
+            }
 
-        if (!fabricObject) {
-            propertiesPanelContainer.innerHTML = '<p class="placeholder-text">Select an element on the canvas to see its properties.</p>';
-            return;
+            const elementData = StateManager.getElementData(fabricObject.id);
+            if (!elementData) {
+                console.error('No state data found for selected object:', fabricObject.id);
+                return;
+            }
+
+            // Generate and append properties form
+            const form = generatePropertiesForm(elementData, fabricObject);
+            domRefs.propertiesPanel.appendChild(form);
+        } catch (error) {
+            console.error('Error updating properties panel:', error);
+            Utils.showError('Failed to update properties panel');
         }
-
-        // It's possible the underlying data hasn't been updated yet if the modification
-        // happened JUST now. Fetch fresh data from StateManager.
-        const elementData = StateManager.getElementData(fabricObject.id);
-        if (!elementData) {
-             propertiesPanelContainer.innerHTML = '<p class="error-message">Error: Could not find data for selected element.</p>';
-             return;
-        }
-
-        // --- Build HTML dynamically ---
-        let html = '';
-
-        // --- Identification ---
-        html += `<div class="prop-section"><h3>Identification</h3>`;
-        html += `<div class="form-group">
-                    <label for="prop-nickname">Nickname:</label>
-                    <input type="text" id="prop-nickname" value="${elementData.nickname || ''}">
-                 </div>`;
-         html += `<div class="form-group">
-                    <label>ID:</label>
-                    <input type="text" value="${elementData.id}" readonly disabled>
-                 </div>`;
-          html += `<div class="form-group">
-                    <label>Type:</label>
-                    <input type="text" value="${elementData.type}" readonly disabled>
-                 </div>`;
-        html += `</div>`;
-
-        // --- Position & Size ---
-        html += `<div class="prop-section"><h3>Transform</h3>`;
-        // Use current Fabric object values as they are most up-to-date during manipulation
-        html += `<div class="form-group-inline">
-                    <label for="prop-left">X:</label> <input type="number" id="prop-left" value="${fabricObject.left.toFixed(1)}" step="1">
-                    <label for="prop-top">Y:</label> <input type="number" id="prop-top" value="${fabricObject.top.toFixed(1)}" step="1">
-                 </div>`;
-        html += `<div class="form-group-inline">
-                     <label for="prop-width">W:</label> <input type="number" id="prop-width" value="${fabricObject.getScaledWidth().toFixed(1)}" step="1">
-                     <label for="prop-height">H:</label> <input type="number" id="prop-height" value="${fabricObject.getScaledHeight().toFixed(1)}" step="1">
-                 </div>`;
-         html += `<div class="form-group-inline">
-                    <label for="prop-angle">Angle:</label> <input type="number" id="prop-angle" value="${fabricObject.angle.toFixed(1)}" step="1">
-                  </div>`;
-        html += `</div>`;
-
-         // --- Style Section ---
-         html += `<div class="prop-section"><h3>Style</h3>`;
-         const style = elementData.style || {};
-          // Background Color (Fill) - Label depends on type
-         const fillColorLabel = elementData.type === 'textbox' ? 'Background Color' : 'Fill Color';
-         html += `<div class="form-group-inline">
-                     <label for="prop-style-color">${fillColorLabel}:</label>
-                     <input type="color" id="prop-style-color" value="${style.color || '#ffffff'}">
-                  </div>`;
-         html += `<div class="form-group">
-                     <label for="prop-style-opacity">Opacity (0-1):</label>
-                     <input type="number" id="prop-style-opacity" value="${style.opacity ?? 1.0}" step="0.1" min="0" max="1">
-                  </div>`;
-
-         // Outline (Stroke)
-         html += `<fieldset><legend>Outline</legend>`;
-          html += `<div class="form-group-inline">
-                     <input type="checkbox" id="prop-style-outlineEnabled" ${style.outlineEnabled ? 'checked' : ''}>
-                     <label for="prop-style-outlineEnabled">Enable Outline</label>
-                  </div>`;
-         html += `<div class="form-group-inline">
-                    <label for="prop-style-outlineColor">Color:</label> <input type="color" id="prop-style-outlineColor" value="${style.outlineColor || '#000000'}" ${!style.outlineEnabled ? 'disabled' : ''}>
-                 </div>`;
-         html += `<div class="form-group-inline">
-                     <label for="prop-style-outlineWidth">Width:</label> <input type="number" id="prop-style-outlineWidth" value="${style.outlineWidth || 1}" min="1" step="1" ${!style.outlineEnabled ? 'disabled' : ''}>
-                 </div>`;
-          // Outline Style (Solid, Dashed, Dotted) - Add later if needed
-         html += `</fieldset>`;
-
-         // Shadow
-          html += `<fieldset><legend>Shadow</legend>`;
-          html += `<div class="form-group-inline">
-                     <input type="checkbox" id="prop-style-shadowEnabled" ${style.shadowEnabled ? 'checked' : ''}>
-                     <label for="prop-style-shadowEnabled">Enable Shadow</label>
-                  </div>`;
-          html += `<div class="form-group-inline">
-                    <label for="prop-style-shadowColor">Color:</label> <input type="color" id="prop-style-shadowColor" value="${style.shadowColor || '#000000'}" ${!style.shadowEnabled ? 'disabled' : ''}>
-                 </div>`;
-           html += `<div class="form-group-inline">
-                    <label for="prop-style-shadowBlur">Blur:</label> <input type="number" id="prop-style-shadowBlur" value="${style.shadowBlur || 5}" min="0" step="1" ${!style.shadowEnabled ? 'disabled' : ''}>
-                 </div>`;
-           html += `<div class="form-group-inline">
-                     <label for="prop-style-shadowOffsetX">Offset X:</label> <input type="number" id="prop-style-shadowOffsetX" value="${style.shadowOffsetX || 0}" step="1" ${!style.shadowEnabled ? 'disabled' : ''}>
-                     <label for="prop-style-shadowOffsetY">Y:</label> <input type="number" id="prop-style-shadowOffsetY" value="${style.shadowOffsetY || 0}" step="1" ${!style.shadowEnabled ? 'disabled' : ''}>
-                  </div>`;
-         html += `</fieldset>`;
-         html += `</div>`; // End Style Section
-
-         // --- Text Properties (Only for Textbox) ---
-         if (elementData.type === 'textbox') {
-             html += `<div class="prop-section"><h3>Text Properties</h3>`;
-             const text = elementData.text || {};
-              html += `<div class="form-group">
-                         <label for="prop-text-content">Content:</label>
-                         <textarea id="prop-text-content">${text.content || ''}</textarea>
-                      </div>`;
-             html += `<div class="form-group-inline">
-                        <label for="prop-text-fontSize">Size:</label> <input type="number" id="prop-text-fontSize" value="${text.fontSize || 16}" min="1">
-                        <label for="prop-text-fill">Color:</label> <input type="color" id="prop-text-fill" value="${text.fill || '#333333'}">
-                     </div>`;
-             // Add controls for bold, italic, alignment etc. later
-             html += `</div>`;
-         }
-
-         // --- Interactions Section ---
-         html += `<div class="prop-section"><h3>Interactions</h3>`;
-         const interactions = elementData.interactions || { triggers:{}, features:{} };
-         const triggers = interactions.triggers || {};
-         const features = interactions.features || {};
-         // Default features if they don't exist
-         features.reveal = features.reveal || { enabled: false };
-         features.spotlight = features.spotlight || { enabled: false };
-         features.panAndZoom = features.panAndZoom || { enabled: false };
-         features.quiz = features.quiz || { enabled: false, questions: [], feedbackTiming: 'end' };
-
-
-         html += `<fieldset><legend>Triggers</legend>`;
-         html += `<div class="form-group-inline">
-                    <input type="checkbox" id="prop-trigger-onClick" ${triggers.onClick ? 'checked' : ''}>
-                    <label for="prop-trigger-onClick">Trigger on Click</label>
-                 </div>`;
-         // Add other triggers later (onHover?)
-         html += `</fieldset>`;
-
-         html += `<fieldset><legend>Features (Activated by Triggers)</legend>`;
-         // Reveal Feature
-         html += `<div class="form-group-inline">
-                     <input type="checkbox" id="prop-feature-revealEnabled" ${features.reveal.enabled ? 'checked' : ''}>
-                     <label for="prop-feature-revealEnabled">Reveal/Hide Other Elements</label>
-                  </div>`;
-          // TODO: Add multi-select for reveal targetIds when enabled
-
-         // Spotlight Feature
-         html += `<div class="form-group-inline">
-                     <input type="checkbox" id="prop-feature-spotlightEnabled" ${features.spotlight.enabled ? 'checked' : ''}>
-                     <label for="prop-feature-spotlightEnabled">Spotlight This Element</label>
-                  </div>`;
-          // TODO: Add options for spotlight type (circle, rect) when enabled
-
-          // Pan & Zoom Feature
-          html += `<div class="form-group-inline">
-                     <input type="checkbox" id="prop-feature-panZoomEnabled" ${features.panAndZoom.enabled ? 'checked' : ''}>
-                     <label for="prop-feature-panZoomEnabled">Pan & Zoom Viewport</label>
-                  </div>`;
-           // TODO: Add inputs for targetX, targetY, targetZoom when enabled
-
-           // Quiz Feature
-           html += `<hr style="margin: 15px 0;">`; // Separator
-           html += `<h4>Quiz</h4>`;
-           html += `<div class="form-group-inline">
-                     <input type="checkbox" id="prop-feature-quizEnabled" ${features.quiz.enabled ? 'checked' : ''}>
-                     <label for="prop-feature-quizEnabled">Trigger Quiz</label>
-                  </div>`;
-           // Quiz config - only show if quiz is enabled
-           html += `<div id="quiz-config-section" class="${features.quiz.enabled ? '' : 'hidden'}">`;
-            html += `<div class="form-group">
-                        <label for="prop-quiz-feedbackTiming">Feedback Timing:</label>
-                        <select id="prop-quiz-feedbackTiming">
-                            <option value="none" ${features.quiz.feedbackTiming === 'none' ? 'selected' : ''}>None</option>
-                            <option value="each" ${features.quiz.feedbackTiming === 'each' ? 'selected' : ''}>After Each Question</option>
-                            <option value="end" ${features.quiz.feedbackTiming === 'end' ? 'selected' : ''}>At End of Quiz</option>
-                            <option value="emailUser" ${features.quiz.feedbackTiming === 'emailUser' ? 'selected' : ''}>Email Results to User</option>
-                            <option value="emailCreator" ${features.quiz.feedbackTiming === 'emailCreator' ? 'selected' : ''}>Email Results to Creator</option>
-                        </select>
-                     </div>`;
-            html += `<div class="form-group ${features.quiz.feedbackTiming === 'emailCreator' ? '' : 'hidden'}" id="quiz-creator-email-group">
-                         <label for="prop-quiz-creatorEmail">Creator Email:</label>
-                         <input type="email" id="prop-quiz-creatorEmail" value="${features.quiz.creatorEmail || ''}" placeholder="instructor@example.com">
-                      </div>`;
-            html += `<button id="edit-quiz-content-button">Edit Quiz Content (${features.quiz.questions?.length || 0} Qs)</button>`;
-           html += `</div>`; // End quiz-config-section
-
-         html += `</fieldset>`; // End Features
-         html += `</div>`; // End Interactions Section
-
-
-          // --- Visibility ---
-          html += `<div class="prop-section"><h3>Initial State</h3>`;
-           html += `<div class="form-group-inline">
-                     <input type="checkbox" id="prop-initiallyHidden" ${elementData.initiallyHidden ? 'checked' : ''}>
-                     <label for="prop-initiallyHidden">Hide element when slide loads?</label>
-                  </div>`;
-          html += `</div>`;
-
-        propertiesPanelContainer.innerHTML = html;
-
-        // --- Attach Listeners ---
-        _attachPropertiesPanelListeners(elementData.id);
     }
 
     function _attachPropertiesPanelListeners(elementId) {

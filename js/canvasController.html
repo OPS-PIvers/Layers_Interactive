@@ -93,40 +93,56 @@ const CanvasController = (() => {
       EditorUI.updateToolbarState(!!activeObject); // Enable/disable delete button etc.
   }
 
-   function _handleObjectModified(e) {
-      if (!isEditor || !e.target) return;
-      const obj = e.target;
-      const elementData = StateManager.getElementData(obj.id);
+  function _handleObjectModified(e) {
+    if (!isEditor || !e.target) return;
+    const obj = e.target;
+    const elementData = StateManager.getElementData(obj.id);
 
-      if (elementData) {
-            const updates = {
-                left: obj.left,
-                top: obj.top,
-                angle: obj.angle,
-                // Use getScaledWidth/Height to account for scaling factors
-                width: obj.getScaledWidth(),
-                height: obj.getScaledHeight(),
-                // Reset scale factors after applying them to width/height
+    if (elementData) {
+        // Store original dimensions for comparison
+        const originalWidth = elementData.width || 100;
+        const originalHeight = elementData.height || 50;
+        
+        // Calculate new dimensions while preserving aspect ratio if shift was held
+        const newWidth = obj.getScaledWidth();
+        const newHeight = obj.getScaledHeight();
+        
+        const updates = {
+            left: obj.left,
+            top: obj.top,
+            angle: obj.angle,
+            width: newWidth,
+            height: newHeight,
+            // Store current scale factors in the state
+            scaleX: obj.scaleX,
+            scaleY: obj.scaleY
+        };
+
+        // Special handling for textboxes
+        if (obj.type === 'textbox') {
+            // For textboxes, we need to handle width differently to maintain text wrapping
+            updates.width = obj.width * obj.scaleX;
+            updates.scaleX = 1; // Reset only X scale for textboxes
+            updates.scaleY = obj.scaleY; // Preserve Y scale for text sizing
+        }
+
+        StateManager.updateElementData(obj.id, updates);
+        
+        // Only reset scale if it's not a textbox
+        if (obj.type !== 'textbox') {
+            obj.set({
+                width: newWidth,
+                height: newHeight,
                 scaleX: 1,
-                scaleY: 1,
-            };
-             // If it's a group (like text on shape), update the contained objects?
-             // Fabric handles group resizing internally, just need to save the new group dimensions.
+                scaleY: 1
+            });
+        }
 
-            // Update scale for Textbox specifically (affects text wrap)
-            if (obj.type === 'textbox') {
-               updates.width = obj.width * obj.scaleX; // Textbox width is managed differently
-            }
-             // Reset scale on the object itself
-            obj.set({ scaleX: 1, scaleY: 1 });
-
-            StateManager.updateElementData(obj.id, updates);
-            // Re-render properties panel if needed as values changed
-            EditorUI.updatePropertiesPanel(obj);
-            canvas.renderAll();
-      }
+        // Update UI
+        EditorUI.updatePropertiesPanel(obj);
+        canvas.requestRenderAll();
+    }
   }
-
 
   function _applyStyle(fabricObject, styleData) {
       if (!fabricObject || !styleData) return;

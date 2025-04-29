@@ -215,119 +215,53 @@ const InteractionHandler = (() => {
     }
 
     function executeNextStep() {
-        if (!isViewer || !StateManager.isSequenceActive()) return;
+        const currentIndex = StateManager.getCurrentSequenceIndex();
+        const totalSteps = StateManager.getCurrentSequence().length;
+        if (currentIndex >= totalSteps - 1) return;
 
-        const currentSequenceIndex = StateManager.getCurrentSequenceIndex();
-        const sequence = StateManager.getSlideSequence();
-
-        if (currentSequenceIndex >= sequence.length -1 ) {
-            console.log("Already at or past the last step.");
-            return; // Cannot go further
-        }
-
-        const targetElementId = sequence[currentSequenceIndex + 1];
-        const targetElementData = StateManager.getElementData(targetElementId);
-        const targetFabricObject = CanvasController.getObjectById(targetElementId);
-
-        if (targetElementData && targetFabricObject) {
-             console.log("Executing next step (manual nav):", targetElementId);
-             // Execute action for the *next* item and advance state
-             executeActionForElement(targetElementData, targetFabricObject, true);
-        } else {
-             console.warn(`Element data or object not found for next sequence item: ${targetElementId}. Advancing anyway.`);
-             // If element is missing, still advance state but record a 'missing_element' action?
-              const preActionState = captureStateSnapshot(null); // No specific element state
-              advanceSequenceAfterAction(targetElementId, 'missing_element', preActionState);
+        const nextSnapshot = history[currentIndex + 1];
+        if (nextSnapshot) {
+            if (restoreFromSnapshot(nextSnapshot)) {
+                StateManager.setCurrentSequenceIndex(currentIndex + 1);
+                updateNavUI();
+            }
         }
     }
 
     function executePreviousStep() {
-        if (!isViewer || !StateManager.isSequenceActive()) return;
+        const currentIndex = StateManager.getCurrentSequenceIndex();
+        if (currentIndex <= 0) return;
 
-        const history = StateManager.getActionHistory();
-        if (history.length === 0) {
-            console.log("No actions in history to undo");
-            return; // Cannot go back further
+        const previousSnapshot = history[currentIndex - 1];
+        if (previousSnapshot) {
+            if (restoreFromSnapshot(previousSnapshot)) {
+                StateManager.setCurrentSequenceIndex(currentIndex - 1);
+                updateNavUI();
+            }
         }
-
-        const lastAction = StateManager.popActionFromHistory();
-        console.log("Executing previous step (undoing action):", lastAction);
-
-        try {
-            // --- Revert State Based on lastAction.preStateSnapshot ---
-            const snapshot = lastAction.preStateSnapshot || {};
-            
-            // 1. Revert viewport transform if available
-            if (snapshot.viewportTransform && Array.isArray(snapshot.viewportTransform)) {
-                CanvasController.animateViewport(snapshot.viewportTransform, 300);
-            }
-            
-            // 2. Revert element visibility
-            if (snapshot.elementVisibility) {
-                Object.entries(snapshot.elementVisibility).forEach(([id, isVisible]) => {
-                    const obj = CanvasController.getObjectById(id);
-                    if (obj) {
-                        obj.visible = isVisible;
-                        
-                        // Also restore opacity if available
-                        if (snapshot.elementOpacity && snapshot.elementOpacity[id] !== undefined) {
-                            obj.opacity = snapshot.elementOpacity[id];
-                        }
-                    }
-                });
-                CanvasController.getCanvas().requestRenderAll();
-            }
-            
-            // 3. Reset any element-specific state
-            if (lastAction.elementId) {
-                const targetObj = CanvasController.getObjectById(lastAction.elementId);
-                if (targetObj) {
-                    // Apply any element-specific restorations
-                    if (snapshot.elementItselfVisibility && 
-                        snapshot.elementItselfVisibility[lastAction.elementId] !== undefined) {
-                        targetObj.visible = snapshot.elementItselfVisibility[lastAction.elementId];
-                        CanvasController.getCanvas().requestRenderAll();
-                    }
-                }
-            }
-        } catch (error) {
-            console.error("Error reverting to previous state:", error);
-            // Continue with sequence index change even if visual state restoration fails
-        }
-
-        // Move the sequence index back
-        StateManager.setCurrentSequenceIndex(lastAction.index);
-
-        // Update UI (buttons will be re-enabled/disabled)
-        updateNavUI();
     }
 
     function updateNavUI() {
-        if (!isViewer || !viewerNavContainer) return;
+        const historyLength = StateManager.getCurrentSequenceIndex();
+        const totalSteps = StateManager.getCurrentSequence().length;
         
-        // Check if the navigation is visible
-        if (viewerNavContainer.style.display === 'none') return;
-        
-        const currentIndex = StateManager.getCurrentSequenceIndex();
-        const sequence = StateManager.getSlideSequence();
-        const historyLength = StateManager.getActionHistory().length;
-        
-        // Previous Button State - disabled if history is empty
-        if (prevButton) {
-            prevButton.disabled = historyLength === 0;
-        }
-        
-        // Next Button State - disabled if at or past end of sequence
-        if (nextButton) {
-            // Fix: Handle case where currentIndex could be -1 (no sequence active)
-            nextButton.disabled = currentIndex < 0 || currentIndex >= sequence.length - 1;
-        }
-        
-        // Step Indicator Text
+        // Update step counter (show current step number instead of completed steps)
+        const currentStep = historyLength + 1;
+        const stepIndicator = document.getElementById('step-indicator');
         if (stepIndicator) {
-            const currentStepNum = historyLength;
-            const totalSteps = sequence.length;
-            stepIndicator.textContent = `Step ${currentStepNum} / ${totalSteps}`;
+            stepIndicator.textContent = `Step ${currentStep} of ${totalSteps}`;
+        }
+
+        // Update navigation buttons
+        const prevButton = document.getElementById('prev-step');
+        const nextButton = document.getElementById('next-step');
+        
+        if (prevButton) {
+            prevButton.disabled = currentStep <= 1;
+        }
+        
+        if (nextButton) {
+            nextButton.disabled = currentStep >= totalSteps;
         }
     }
 
@@ -375,40 +309,88 @@ const InteractionHandler = (() => {
     function captureStateSnapshot(triggerElementId) {
         const snapshot = {
             sequenceIndex: StateManager.getCurrentSequenceIndex(),
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            triggerElementId,
+            viewportTransform: [...CanvasController.getViewportTransform()],
+            elements: {}
         };
 
-        // 1. Capture current viewport transform
-        snapshot.viewportTransform = [...CanvasController.getViewportTransform()]; // Create copy
-
-        // 2. Capture element visibility states (all elements)
-        snapshot.elementVisibility = {};
+        // Capture complete element states
         const slide = StateManager.getCurrentSlide();
-        
         if (slide && slide.elements) {
             slide.elements.forEach(element => {
                 const fabricObj = CanvasController.getObjectById(element.id);
                 if (fabricObj) {
-                    snapshot.elementVisibility[element.id] = fabricObj.visible;
+                    snapshot.elements[element.id] = {
+                        visible: fabricObj.visible,
+                        opacity: fabricObj.opacity,
+                        position: {
+                            left: fabricObj.left,
+                            top: fabricObj.top
+                        },
+                        transform: {
+                            angle: fabricObj.angle,
+                            scaleX: fabricObj.scaleX,
+                            scaleY: fabricObj.scaleY
+                        },
+                        style: { ...element.style },
+                        dimensions: {
+                            width: fabricObj.width,
+                            height: fabricObj.height
+                        }
+                    };
                 }
             });
         }
-
-        // 3. Capture opacity values for elements that might be animating
-        snapshot.elementOpacity = {};
-        if (slide && slide.elements) {
-            slide.elements.forEach(element => {
-                const fabricObj = CanvasController.getObjectById(element.id);
-                if (fabricObj) {
-                    snapshot.elementOpacity[element.id] = fabricObj.opacity;
-                }
-            });
-        }
-
-        // 4. Store trigger element id for reference
-        snapshot.triggerElementId = triggerElementId;
         
         return snapshot;
+    }
+
+    function restoreFromSnapshot(snapshot) {
+        if (!snapshot) return false;
+
+        try {
+            // Restore viewport first
+            if (snapshot.viewportTransform) {
+                CanvasController.setViewportTransform(snapshot.viewportTransform);
+            }
+
+            // Restore element states
+            Object.entries(snapshot.elements).forEach(([elementId, elementState]) => {
+                const fabricObj = CanvasController.getObjectById(elementId);
+                if (fabricObj) {
+                    // Apply all saved properties
+                    fabricObj.set({
+                        visible: elementState.visible,
+                        opacity: elementState.opacity,
+                        left: elementState.position.left,
+                        top: elementState.position.top,
+                        angle: elementState.transform.angle,
+                        scaleX: elementState.transform.scaleX,
+                        scaleY: elementState.transform.scaleY,
+                        width: elementState.dimensions.width,
+                        height: elementState.dimensions.height
+                    });
+
+                    // Apply style properties if they exist
+                    if (elementState.style) {
+                        const elementData = StateManager.getElementData(elementId);
+                        if (elementData) {
+                            elementData.style = { ...elementState.style };
+                            StateManager.updateElementData(elementId, elementData);
+                        }
+                    }
+                }
+            });
+
+            // Update UI
+            CanvasController.getCanvas().requestRenderAll();
+            updateNavUI();
+            return true;
+        } catch (error) {
+            console.error('Error restoring state:', error);
+            return false;
+        }
     }
 
     // --- Public API ---
