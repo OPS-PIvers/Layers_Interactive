@@ -4,19 +4,28 @@ document.addEventListener('DOMContentLoaded', () => {
     let initAttempts = 0;
     const maxAttempts = 5;
     
-    function initializeApp() {
+    function initializeApp(mode) {
         try {
+            console.log(`Initializing app in ${mode || 'default'} mode`);
             // Check for required DOM elements
             const editorCanvas = document.getElementById('editor-canvas');
             const viewerCanvas = document.getElementById('viewer-canvas');
-            const requiredElements = [
-                'properties-panel',
-                'toolbar',
-                'slide-list',
-                'sequence-list',
-                'loading-indicator',
+            
+            // Different required elements based on mode
+            let requiredElements = [
+                'loading-indicator', 
                 'error-message'
             ];
+            
+            // Add mode-specific required elements
+            if (mode === 'editor' || editorCanvas) {
+                requiredElements = requiredElements.concat([
+                    'properties-panel',
+                    'toolbar',
+                    'slide-list',
+                    'sequence-list'
+                ]);
+            }
 
             const missingElements = requiredElements.filter(id => !document.getElementById(id));
             
@@ -29,14 +38,18 @@ document.addEventListener('DOMContentLoaded', () => {
             StateManager.init(); // Initialize state management
             
             // Initialize canvas controllers
-            if (editorCanvas) {
+            if (mode === 'editor' || editorCanvas) {
+                console.log("Initializing editor components");
                 CanvasController.initCanvas('editor-canvas', true);
                 EditorUI.init(); // Initialize editor UI components
-                QuizEditor.init(); // Initialize quiz editing capabilities
-            } else if (viewerCanvas) {
+                QuizEditor.initQuizEditor(); // Initialize quiz editing capabilities
+            } else if (mode === 'viewer' || viewerCanvas) {
+                console.log("Initializing viewer components");
                 CanvasController.initCanvas('viewer-canvas', false);
                 InteractionHandler.init('viewer'); // Initialize viewer interaction handling
                 QuizPlayer.init(); // Initialize quiz playing capabilities
+            } else {
+                throw new Error("Could not determine application mode");
             }
 
             // Load initial content if available
@@ -53,15 +66,15 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (initAttempts < maxAttempts) {
                 console.log(`Retrying initialization in 100ms (attempt ${initAttempts}/${maxAttempts})`);
-                setTimeout(initializeApp, 100);
+                setTimeout(() => initializeApp(mode), 100);
             } else {
                 Utils.showError('Failed to initialize application. Please refresh the page.');
             }
         }
     }
 
-    // Start initialization
-    initializeApp();
+    // initializeApp will be called by the specific HTML page
+    window.initializeApp = initializeApp;
 });
 
 // Optional: Add beforeunload listener for editor to warn about unsaved changes
