@@ -1,59 +1,73 @@
 const Utils = (() => {
-
   // Keep references, but find elements after DOM is loaded
   let loadingIndicator = null;
   let errorIndicator = null;
   let errorMessageElement = null;
+  let domInitialized = false;
 
-  function _initUtilsDOMReferences() {
-      loadingIndicator = document.getElementById('loading-indicator');
-      errorIndicator = document.getElementById('error-indicator');
-      errorMessageElement = document.getElementById('error-message');
-      // Attach listener here now that we know DOM should be ready
-      listen('#error-indicator .close-button', 'click', hideError);
-      if (!loadingIndicator || !errorIndicator || !errorMessageElement) {
-          console.warn("Utils could not find all indicator elements on init.");
-      }
+  function initUtilsDOMReferences() {
+    loadingIndicator = document.getElementById('loading-indicator');
+    errorIndicator = document.getElementById('error-indicator');
+    errorMessageElement = document.getElementById('error-message');
+    
+    if (loadingIndicator && errorIndicator && errorMessageElement) {
+      domInitialized = true;
+      Utils.listen('#error-indicator .close-button', 'click', hideError);
+      console.log("Utils DOM references initialized successfully");
+    } else {
+      console.warn("Utils could not find all indicator elements, will retry when needed");
+    }
+    return domInitialized;
   }
 
+  // Ensure DOM references exist before using them
+  function ensureDOMReferences() {
+    if (!domInitialized) {
+      return initUtilsDOMReferences();
+    }
+    return domInitialized;
+  }
 
   function showLoadingIndicator(show, message = 'Loading...') {
-    // Check if refs are initialized
-    if (!loadingIndicator && show) {
-        console.warn("Loading indicator not initialized, cannot show.");
-        return;
+    if (!ensureDOMReferences() && show) {
+      console.warn("Loading indicator not initialized, using fallback");
+      return;
     }
-     if (!loadingIndicator) return; // Can't hide if not found
-
-    loadingIndicator.querySelector('p').textContent = message;
-    loadingIndicator.style.display = show ? 'flex' : 'none';
-    if (show) {
+    
+    if (loadingIndicator) {
+      const messageEl = loadingIndicator.querySelector('p');
+      if (messageEl) messageEl.textContent = message;
+      loadingIndicator.style.display = show ? 'flex' : 'none';
+      if (show) {
         loadingIndicator.classList.add('active');
-    } else {
-         loadingIndicator.classList.remove('active');
+      } else {
+        loadingIndicator.classList.remove('active');
+      }
     }
   }
 
   function showError(message = 'An unexpected error occurred.') {
     console.error("Error Shown:", message); // Log detailed error
-     if (!errorIndicator || !errorMessageElement) {
-        console.warn("Error indicator elements not initialized, using alert fallback.");
-        alert(`Error: ${message}`);
-        return;
-     }
-       errorMessageElement.textContent = message;
-       errorIndicator.style.display = 'flex';
-       errorIndicator.classList.add('active');
+    if (!ensureDOMReferences()) {
+      console.warn("Error indicator elements not initialized, using alert fallback");
+      alert(`Error: ${message}`);
+      return;
+    }
+    
+    errorMessageElement.textContent = message;
+    errorIndicator.style.display = 'flex';
+    errorIndicator.classList.add('active');
   }
 
   function hideError() {
-     // Check if refs are initialized
-     if (!errorIndicator) {
-        console.warn("Error indicator not initialized, cannot hide.");
-        return;
-     }
-        errorIndicator.style.display = 'none';
-        errorIndicator.classList.remove('active');
+    // Check if refs are initialized
+    if (!ensureDOMReferences()) {
+      console.warn("Error indicator not initialized, cannot hide");
+      return;
+    }
+    
+    errorIndicator.style.display = 'none';
+    errorIndicator.classList.remove('active');
   }
 
   // Basic UUID generator
@@ -76,42 +90,42 @@ const Utils = (() => {
     return array;
   }
 
-   // Simple debounce function
-   function debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-   }
+  // Simple debounce function
+  function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+      const later = () => {
+        clearTimeout(timeout);
+        func(...args);
+      };
+      clearTimeout(timeout);
+      timeout = setTimeout(later, wait);
+    };
+  }
 
   // Add event listener safely
   function listen(selectorOrElement, eventName, callback) {
-      const element = typeof selectorOrElement === 'string'
-          ? document.querySelector(selectorOrElement)
-          : selectorOrElement;
-      if (element) {
-          element.addEventListener(eventName, callback);
-      } else {
-          // Don't warn immediately, element might appear later.
-          // console.warn(`Element not found for listener: ${selectorOrElement}`);
-      }
+    const element = typeof selectorOrElement === 'string'
+      ? document.querySelector(selectorOrElement)
+      : selectorOrElement;
+    if (element) {
+      element.addEventListener(eventName, callback);
+    } else {
+      console.warn(`Element not found for listener: ${selectorOrElement}`);
+    }
   }
 
-
-  return {
-    initUtilsDOMReferences: _initUtilsDOMReferences, // Expose init function
+  // Create the Utils object to return
+  const Utils = {
+    initUtilsDOMReferences,
     showLoadingIndicator,
     showError,
-    hideError, // Allow closing error modal
+    hideError,
     generateUUID,
     shuffleArray,
     debounce,
     listen
   };
-
+  
+  return Utils;
 })();

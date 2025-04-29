@@ -373,106 +373,191 @@ const QuizEditor = (() => {
     // --- Save ---
 
     function saveQuiz() {
-         // Perform final validation?
-         // E.g., ensure MC has a correct answer, FillBlank has answer, etc.
-         if (!validateQuizData(currentQuizData)) {
-             // Validation function would show errors using Utils.showError
-             return;
-         }
+        // First save current question if one is selected
+        if (currentSelectedQuestionId) {
+            handleDetailChange();
+        }
+        
+        // Perform validation
+        if (!validateQuizData(currentQuizData)) {
+            // Validation function shows errors using Utils.showError
+            return;
+        }
 
-         // Save the current state of details (in case last change was not captured by input/change)
-          handleDetailChange();
-
-         // Update the master state in StateManager
-         StateManager.updateElementData(currentElementId, {
-             interactions: {
-                // Need to merge carefully, preserving other interactions
-                ...StateManager.getElementData(currentElementId).interactions,
+        // Create a deep copy to avoid reference issues
+        const quizDataCopy = JSON.parse(JSON.stringify(currentQuizData));
+        
+        try {
+            // Update the master state in StateManager
+            const elementData = StateManager.getElementData(currentElementId);
+            if (!elementData) {
+                throw new Error("Element data not found");
+            }
+            
+            // Create the full updated structure
+            const updatedInteractions = {
+                ...elementData.interactions,
                 features: {
-                    ...StateManager.getElementData(currentElementId).interactions?.features,
-                    quiz: currentQuizData // Replace with the edited quiz data
+                    ...elementData.interactions?.features,
+                    quiz: quizDataCopy
                 }
-             }
-         });
+            };
+            
+            // Apply the update
+            const success = StateManager.updateElementData(currentElementId, {
+                interactions: updatedInteractions
+            });
+            
+            if (!success) {
+                throw new Error("Failed to update element data");
+            }
 
-          // Update the properties panel in EditorUI to reflect potential changes (like question count)
-          const activeObj = CanvasController.getObjectById(currentElementId);
-          if (activeObj && EditorUI.updatePropertiesPanel) {
-             EditorUI.updatePropertiesPanel(activeObj);
-          }
+            // Update the properties panel if element is currently selected
+            const activeObj = CanvasController.getObjectById(currentElementId);
+            if (activeObj && typeof EditorUI !== 'undefined' && EditorUI.updatePropertiesPanel) {
+                EditorUI.updatePropertiesPanel(activeObj);
+            }
 
-         console.log("Quiz Saved to StateManager for element:", currentElementId);
-         isDirty = false; // Mark as clean after save
-         close(); // Close the modal
+            console.log("Quiz Saved to StateManager for element:", currentElementId);
+            isDirty = false; // Mark as clean after save
+            close(); // Close the modal
+        } catch (error) {
+            console.error("Error saving quiz:", error);
+            Utils.showError(`Failed to save quiz: ${error.message}`);
+        }
     }
 
-     function validateQuizData(quizData) {
-         let isValid = true;
-         let errorMessages = [];
+    function validateQuizData(quizData) {
+        let isValid = true;
+        let errorMessages = [];
 
-         if (!quizData || !quizData.questions) return true; // No questions is valid
+        if (!quizData) {
+            Utils.showError("Invalid quiz data: Quiz data is null or undefined");
+            return false;
+        }
+        
+        if (!quizData.questions || !Array.isArray(quizData.questions)) {
+            // No questions is technically valid for a quiz that's not yet configured
+            return true;
+        }
 
-         quizData.questions.forEach((q, index) => {
-             const qNum = index + 1;
-             if (!q.prompt?.trim()) {
-                 isValid = false;
-                 errorMessages.push(`Question ${qNum}: Prompt cannot be empty.`);
-             }
-
-             switch (q.questionType) {
+        quizData.questions.forEach((q, index) => {
+            const qNum = index + 1;
+            
+            // Check for question ID
+            if (!q.questionId) {
+                q.questionId = Utils.generateUUID(); // Auto-fix missing IDs
+            }
+            
+            // Check for prompt
+            if (!q.prompt || !q.prompt.trim()) {
+                isValid = false;
+                errorMessages.push(`Question ${qNum}: Prompt cannot be empty.`);
+            }
+            
+            // Type-specific validation
+            switch (q.questionType) {
                 case 'multipleChoice':
-                    if (!q.options || q.options.length < 2) {
-                         isValid = false;
-                         errorMessages.push(`Question ${qNum} (Multiple Choice): Must have at least 2 options.`);
+                    if (!q.options || !Array.isArray(q.options) || q.options.length < 2) {
+                        isValid = false;
+                        errorMessages.push(`Question ${qNum} (Multiple Choice): Must have at least 2 options.`);
                     } else if (!q.options.some(opt => opt.isCorrect)) {
                         isValid = false;
                         errorMessages.push(`Question ${qNum} (Multiple Choice): Must have at least one correct option marked.`);
                     }
-                     if (q.options.some(opt => !opt.text?.trim())) {
-                         isValid = false;
-                         errorMessages.push(`Question ${qNum} (Multiple Choice): All options must have text.`);
-                     }
+                    
+                    if (q.options && q.options.some(opt => !opt.text || !opt.text.trim())) {
+                        isValid = false;
+                        errorMessages.push(`Question ${qNum} (Multiple Choice): All options must have text.`);
+                    }
+                    
+                    // Ensure all options have IDs
+                    if (q.options) {
+                        q.options.forEach(opt => {
+                            if (!opt.optionId) {
+                                opt.optionId = Utils.generateUUID(); // Auto-fix missing IDs
+                            }
+                        });
+                    }
                     break;
+                    
                 case 'fillBlank':
-                    if (!q.correctAnswer?.trim()) {
+                    if (!q.correctAnswer || !q.correctAnswer.trim()) {
                         isValid = false;
                         errorMessages.push(`Question ${qNum} (Fill Blank): Correct answer cannot be empty.`);
                     }
-                    break;
-                case 'matching':
-                     if (!q.pairs || q.pairs.length < 2) {
-                         isValid = false;
-                         errorMessages.push(`Question ${qNum} (Matching): Must have at least 2 pairs.`);
-                     } else if (q.pairs.some(p => !p.prompt?.trim() || !p.answer?.trim())) {
-                          isValid = false;
-                          errorMessages.push(`Question ${qNum} (Matching): All prompts and answers in pairs must have text.`);
-                     }
-                    break;
-                case 'ordering':
-                    if (!q.items || q.items.length < 2) {
-                         isValid = false;
-                         errorMessages.push(`Question ${qNum} (Ordering): Must have at least 2 items.`);
-                    } else if (q.items.some(item => !item?.trim())) {
-                         isValid = false;
-                         errorMessages.push(`Question ${qNum} (Ordering): All items must have text.`);
+                    
+                    // Ensure caseSensitive property exists
+                    if (q.caseSensitive === undefined) {
+                        q.caseSensitive = false; // Default value
                     }
                     break;
-             }
-         });
+                    
+                case 'matching':
+                    if (!q.pairs || !Array.isArray(q.pairs) || q.pairs.length < 2) {
+                        isValid = false;
+                        errorMessages.push(`Question ${qNum} (Matching): Must have at least 2 pairs.`);
+                    } else if (q.pairs.some(p => !p.prompt || !p.prompt.trim() || !p.answer || !p.answer.trim())) {
+                        isValid = false;
+                        errorMessages.push(`Question ${qNum} (Matching): All prompts and answers in pairs must have text.`);
+                    }
+                    
+                    // Ensure all pairs have IDs
+                    if (q.pairs) {
+                        q.pairs.forEach(pair => {
+                            if (!pair.pairId) {
+                                pair.pairId = Utils.generateUUID(); // Auto-fix missing IDs
+                            }
+                        });
+                    }
+                    break;
+                    
+                case 'ordering':
+                    if (!q.items || !Array.isArray(q.items) || q.items.length < 2) {
+                        isValid = false;
+                        errorMessages.push(`Question ${qNum} (Ordering): Must have at least 2 items.`);
+                    } else if (q.items.some(item => !item || !item.trim())) {
+                        isValid = false;
+                        errorMessages.push(`Question ${qNum} (Ordering): All items must have text.`);
+                    }
+                    break;
+                    
+                default:
+                    isValid = false;
+                    errorMessages.push(`Question ${qNum}: Unknown question type "${q.questionType}".`);
+            }
+        });
 
-         if (!isValid) {
-             Utils.showError("Quiz validation failed:\n- " + errorMessages.join("\n- "));
-         }
-         return isValid;
-     }
+        if (!isValid) {
+            Utils.showError("Quiz validation failed:\n- " + errorMessages.join("\n- "));
+        }
+        return isValid;
+    }
 
 
     // --- Public API ---
-    _init(); // Initialize internal listeners
+    // Public init method that can be called when needed
+    function initQuizEditor() {
+        modalElement = document.getElementById('quiz-editor-modal');
+        bodyElement = document.getElementById('quiz-editor-body');
+        saveButton = document.getElementById('quiz-editor-save-button');
+        
+        if (modalElement && bodyElement && saveButton) {
+            // Attach listener to save button within the modal
+            Utils.listen(saveButton, 'click', saveQuiz);
+            console.log("Quiz Editor initialized");
+            return true;
+        } else {
+            console.warn("Quiz Editor DOM elements not ready, will retry later");
+            return false;
+        }
+    }
+
+    // Return public API
     return {
+        initQuizEditor, // Add this new method
         open,
         close,
-        // Expose internal methods needed by inline event handlers
         selectQuestion,
         handleDetailChange,
         addMCOption,

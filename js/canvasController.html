@@ -24,32 +24,65 @@ const CanvasController = (() => {
     });
 
     if (isEditor) {
-        // Editor-specific event listeners
-        canvas.on({
-            'selection:created': _handleSelectionChange,
-            'selection:updated': _handleSelectionChange,
-            'selection:cleared': _handleSelectionChange,
-            'object:modified': _handleObjectModified, // After move, scale, rotate
-            // Consider 'object:moving', 'object:scaling', 'object:rotating' for real-time updates if needed
-        });
-         // Handle delete key
-         window.addEventListener('keydown', (e) => {
-            if (e.key === 'Delete' || e.key === 'Backspace') {
-                if (canvas.getActiveObject() && isEditor) {
-                    deleteSelectedObject();
-                }
-            }
-         });
+      // Editor-specific event listeners
+      canvas.on({
+        'selection:created': _handleSelectionChange,
+        'selection:updated': _handleSelectionChange,
+        'selection:cleared': _handleSelectionChange,
+        'object:modified': _handleObjectModified, // After move, scale, rotate
+      });
+      
+      // Handle delete key
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          if (canvas.getActiveObject() && isEditor) {
+            deleteSelectedObject();
+          }
+        }
+      });
     } else {
-        // Viewer-specific settings
-        canvas.selection = false; // Ensure selection is off
-        canvas.hoverCursor = 'pointer'; // Indicate clickable items
-        canvas.defaultCursor = 'default';
+      // Viewer-specific settings
+      canvas.selection = false; // Ensure selection is off
+      canvas.hoverCursor = 'pointer'; // Indicate clickable items
+      canvas.defaultCursor = 'default';
     }
 
-    window.addEventListener('resize', Utils.debounce(resizeCanvas, 250));
-    resizeCanvas(); // Initial size calculation
+    window.addEventListener('resize', Utils.debounce(_resizeCanvas, 250));
+    _resizeCanvas(); // Initial size calculation
     console.log(`Canvas initialized for ${isEditor ? 'Editor' : 'Viewer'}`);
+  }
+
+  // And in the public API section, replace the existing resizeCanvas with:
+  resizeCanvas() {
+    _resizeCanvas();
+  }
+
+  // Add this private function inside the CanvasController IIFE before the return statement
+  // Place it with the other private functions like _handleSelectionChange, etc.
+  function _resizeCanvas() {
+    if (!canvas || !canvas.wrapperEl) return;
+    const container = canvas.wrapperEl.parentNode;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    canvas.setWidth(width);
+    canvas.setHeight(height);
+
+    // Optional: Adjust zoom to fit content if needed, especially in viewer
+    // if (!isEditor) { /* ... logic to fit bounds ... */ }
+
+    canvas.renderAll();
+  }
+
+  // Then in _initCanvas function, find this line:
+  window.addEventListener('resize', Utils.debounce(resizeCanvas, 250));
+
+  // And change it to:
+  window.addEventListener('resize', Utils.debounce(_resizeCanvas, 250));
+
+  // Then in the public API section, replace the existing resizeCanvas method with:
+  resizeCanvas() {
+    _resizeCanvas();
   }
 
   function _handleSelectionChange() {
@@ -320,39 +353,59 @@ const CanvasController = (() => {
     },
 
     updateObjectFromData(elementId) {
-         const fabricObj = this.getObjectById(elementId);
-         const elementData = StateManager.getElementData(elementId);
-         if (fabricObj && elementData) {
-             // Update position, size, angle
-             fabricObj.set({
-                left: elementData.left,
-                top: elementData.top,
-                angle: elementData.angle,
-             });
-             // Update dimensions carefully based on type
-              if (fabricObj.type === 'rect' || fabricObj.type === 'textbox') {
-                    fabricObj.set({ width: elementData.width, height: elementData.height });
-              } else if (fabricObj.type === 'ellipse') {
-                   fabricObj.set({ rx: elementData.width / 2, ry: elementData.height / 2 });
-              }
-              // Reset scale just in case
-              fabricObj.set({ scaleX: 1, scaleY: 1 });
-
-
-             // Apply styles and text properties
-             _applyStyle(fabricObj, elementData.style);
-             if (fabricObj.type === 'textbox') {
+        const fabricObj = this.getObjectById(elementId);
+        const elementData = StateManager.getElementData(elementId);
+        
+        if (!fabricObj || !elementData) {
+            console.error(`Cannot update object: fabricObj=${!!fabricObj}, elementData=${!!elementData}`);
+            return false;
+        }
+        
+        try {
+            // Update basic properties
+            const updates = {
+                left: elementData.left || 0,
+                top: elementData.top || 0,
+                angle: elementData.angle || 0,
+            };
+            
+            // Update dimensions carefully based on type
+            if (fabricObj.type === 'rect' || fabricObj.type === 'textbox') {
+                updates.width = elementData.width || 100;
+                updates.height = elementData.height || 50;
+            } else if (fabricObj.type === 'ellipse') {
+                updates.rx = (elementData.width || 100) / 2;
+                updates.ry = (elementData.height || 50) / 2;
+            }
+            
+            // Reset scale factors
+            updates.scaleX = 1;
+            updates.scaleY = 1;
+            
+            // Apply position and dimension updates
+            fabricObj.set(updates);
+            
+            // Apply styles
+            _applyStyle(fabricObj, elementData.style);
+            
+            // Apply text properties for textbox
+            if (fabricObj.type === 'textbox' && elementData.text) {
                 _applyTextProperties(fabricObj, elementData.text);
-             }
-             // Update visibility
-             fabricObj.visible = !elementData.initiallyHidden; // Base visibility
-
-             // Update the stored appData reference
-             fabricObj.appData = elementData;
-
-             canvas.requestRenderAll();
-         }
-    },
+            }
+            
+            // Update visibility
+            fabricObj.visible = !elementData.initiallyHidden;
+            
+            // Update the stored appData reference
+            fabricObj.appData = elementData;
+            
+            canvas.requestRenderAll();
+            return true;
+        } catch (error) {
+            console.error(`Error updating object ${elementId}:`, error);
+            return false;
+        }
+    }
 
     removeObjectById(elementId) {
       const obj = this.getObjectById(elementId);
@@ -457,39 +510,59 @@ const CanvasController = (() => {
     async setBackgroundImage(imageFileId) {
         if (!canvas) return;
         Utils.showLoadingIndicator(true, 'Setting Background...');
+        
         try {
             const dataUrl = await ServerClient.loadImage(imageFileId);
-            fabric.Image.fromURL(dataUrl, (img) => {
-                 // Get current slide dimensions (or canvas if slide dimensions not stored)
-                 const slide = StateManager.getCurrentSlide();
-                 const targetWidth = slide?.imageWidth || canvas.width;
-                 const targetHeight = slide?.imageHeight || canvas.height;
-
-                 canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
-                    // Scale to fit the intended dimensions
-                    scaleX: targetWidth / img.width,
-                    scaleY: targetHeight / img.height,
-                    originX: 'left',
-                    originY: 'top'
-                 });
-                 // Update state manager
-                 StateManager.updateSlideProperties(StateManager.getCurrentSlideId(), {
-                     imageFileId: imageFileId,
-                     imageUrl: `drive://${imageFileId}`, // Optional: store reference
-                     imageWidth: img.width, // Store original image dimensions
-                     imageHeight: img.height,
-                     backgroundColor: null // Clear color if image is set
-                 });
-                 currentSlideBg = { type: 'image', value: imageFileId };
-                 EditorUI.updateSlideBackgroundDisplay(imageFileId, "Image Loaded"); // Update UI
+            
+            // Convert callback to Promise for better async handling
+            await new Promise((resolve, reject) => {
+                fabric.Image.fromURL(dataUrl, (img) => {
+                    if (!img) {
+                        reject(new Error("Failed to create image from URL"));
+                        return;
+                    }
+                    
+                    // Calculate proper scaling
+                    const slide = StateManager.getCurrentSlide();
+                    const targetWidth = slide?.imageWidth || canvas.width;
+                    const targetHeight = slide?.imageHeight || canvas.height;
+                    
+                    // Set background with proper scaling
+                    canvas.setBackgroundImage(img, () => {
+                        // Update state only after background is set
+                        StateManager.updateSlideProperties(StateManager.getCurrentSlideId(), {
+                            imageFileId: imageFileId,
+                            imageUrl: `drive://${imageFileId}`,
+                            imageWidth: img.width,
+                            imageHeight: img.height,
+                            backgroundColor: null
+                        });
+                        
+                        currentSlideBg = { type: 'image', value: imageFileId };
+                        
+                        // Render after all updates
+                        canvas.renderAll();
+                        resolve();
+                    }, {
+                        scaleX: targetWidth / img.width,
+                        scaleY: targetHeight / img.height,
+                        originX: 'left',
+                        originY: 'top'
+                    });
+                });
             });
+            
+            // Update UI only after everything is complete
+            if (typeof EditorUI !== 'undefined' && EditorUI.updateSlideBackgroundDisplay) {
+                EditorUI.updateSlideBackgroundDisplay(imageFileId, "Image Loaded");
+            }
         } catch (error) {
             console.error("Error setting background image:", error);
             Utils.showError(`Failed to set background: ${error.message}`);
         } finally {
-             Utils.showLoadingIndicator(false);
+            Utils.showLoadingIndicator(false);
         }
-    },
+    }
 
     clearBackgroundImage() {
          if (!canvas) return;
@@ -505,84 +578,113 @@ const CanvasController = (() => {
     },
 
     // --- Animation ---
-     animateObject(elementId, animationType, duration = 500, onComplete = null) {
-         const obj = this.getObjectById(elementId);
-         if (!obj) return;
+    animateObject(elementId, animationType, duration = 500, onComplete = null) {
+        const obj = this.getObjectById(elementId);
+        if (!obj) {
+            console.error(`Cannot animate: Object with ID ${elementId} not found`);
+            if (onComplete) onComplete();
+            return;
+        }
 
-         let targetProps = {};
-         let startProps = {}; // Store initial state for potential reversal
+        let targetProps = {};
+        let startProps = {}; // Store initial state for potential reversal
 
-         switch (animationType) {
-            case 'fadeIn':
-                startProps = { opacity: 0 };
-                targetProps = { opacity: obj.appData.style?.opacity ?? 1 }; // Fade to original opacity
-                obj.set('opacity', 0); // Start transparent
-                obj.visible = true; // Make sure it's visible for animation
-                break;
-            case 'fadeOut':
-                 startProps = { opacity: obj.opacity };
-                 targetProps = { opacity: 0 };
-                 obj.visible = true;
-                break;
-            case 'pulse': // Requires multiple steps or custom animation logic
-                 // Simple scale pulse example
-                 const originalScaleX = obj.scaleX || 1;
-                 const originalScaleY = obj.scaleY || 1;
-                 startProps = { scaleX: originalScaleX, scaleY: originalScaleY};
-                 targetProps = { scaleX: originalScaleX * 1.2, scaleY: originalScaleY * 1.2 };
-                 obj.visible = true;
-                 // Need to chain animation back to original scale
-                 fabric.util.animate({
-                     target: obj, // Animate the object directly
-                     startValue: startProps.scaleX, // Animate scaleX
-                     endValue: targetProps.scaleX,
-                     duration: duration / 2,
-                     onChange: canvas.renderAll.bind(canvas),
-                     onComplete: () => {
-                         fabric.util.animate({
-                             target: obj,
-                             startValue: targetProps.scaleX,
-                             endValue: startProps.scaleX,
-                             duration: duration / 2,
-                             onChange: canvas.renderAll.bind(canvas),
-                             onComplete: () => {
-                                 obj.set({scaleX: originalScaleX, scaleY: originalScaleY }); // Ensure final state
-                                 if (onComplete) onComplete();
-                             }
-                         });
-                     },
-                     // easing: fabric.util.ease.easeInOutSine
-                 });
-                 // Note: This only animates scaleX for simplicity. Need to do scaleY too.
-                 // Returning here as the animation is handled internally.
-                 return;
-            // Add more cases: slideIn, bounce, etc.
-            default:
-                console.warn("Unsupported animation type:", animationType);
-                return;
-         }
+        try {
+            switch (animationType) {
+                case 'fadeIn':
+                    startProps = { opacity: 0 };
+                    // Fade to element's defined opacity or default to 1
+                    targetProps = { opacity: obj.appData?.style?.opacity ?? 1 };
+                    obj.set('opacity', 0); // Start transparent
+                    obj.visible = true; // Make sure it's visible for animation
+                    break;
+                case 'fadeOut':
+                    startProps = { opacity: obj.opacity };
+                    targetProps = { opacity: 0 };
+                    obj.visible = true;
+                    break;
+                case 'pulse': // Multiple steps animation with callback chain
+                    const originalScaleX = obj.scaleX || 1;
+                    const originalScaleY = obj.scaleY || 1;
+                    startProps = { scaleX: originalScaleX, scaleY: originalScaleY};
+                    targetProps = { scaleX: originalScaleX * 1.2, scaleY: originalScaleY * 1.2 };
+                    obj.visible = true;
+                    
+                    // Chain animations with callbacks
+                    return this._runPulseAnimation(obj, originalScaleX, originalScaleY, duration, onComplete);
+                    
+                // Add more cases as needed
+                default:
+                    console.warn(`Unsupported animation type: ${animationType}`);
+                    if (onComplete) onComplete();
+                    return;
+            }
 
-         // Apply start state if needed (like for fadeIn)
-         obj.set(startProps);
+            // Apply start state if needed
+            obj.set(startProps);
+            canvas.requestRenderAll();
 
-         // Use Fabric animation
-         obj.animate(targetProps, {
-            duration: duration,
-            onChange: canvas.renderAll.bind(canvas), // Render during animation
-            onComplete: () => {
-                if (animationType === 'fadeOut') {
-                    obj.visible = false; // Hide after fading out
+            // Use Fabric animation
+            obj.animate(targetProps, {
+                duration: duration,
+                onChange: () => canvas.requestRenderAll(), // Render during animation
+                onComplete: () => {
+                    if (animationType === 'fadeOut') {
+                        obj.visible = false; // Hide after fading out
+                    }
+                    
+                    // Ensure final state is set explicitly
+                    obj.set(targetProps);
+                    if (animationType === 'fadeIn') {
+                        obj.set({ opacity: obj.appData.style?.opacity ?? 1 }); // Restore original opacity
+                    }
+
+                    canvas.requestRenderAll();
+                    if (onComplete) onComplete();
+                },
+                easing: fabric.util.ease.easeInOutQuad  // Add easing for smoother animation
+            });
+        } catch (error) {
+            console.error(`Animation error for ${animationType}:`, error);
+            if (onComplete) onComplete(); // Ensure callback still runs
+        }
+    }
+    // Helper for pulse animation
+    function _runPulseAnimation(obj, originalScaleX, originalScaleY, duration, onComplete) {
+        try {
+            // First half - scale up
+            obj.animate(
+                { scaleX: originalScaleX * 1.2, scaleY: originalScaleY * 1.2 },
+                {
+                    duration: duration / 2,
+                    onChange: () => canvas.requestRenderAll(),
+                    onComplete: () => {
+                        // Second half - scale back down
+                        obj.animate(
+                            { scaleX: originalScaleX, scaleY: originalScaleY },
+                            {
+                                duration: duration / 2,
+                                onChange: () => canvas.requestRenderAll(),
+                                onComplete: () => {
+                                    // Ensure final state is set explicitly
+                                    obj.set({ scaleX: originalScaleX, scaleY: originalScaleY });
+                                    canvas.requestRenderAll();
+                                    if (onComplete) onComplete();
+                                },
+                                easing: fabric.util.ease.easeOutBounce
+                            }
+                        );
+                    },
+                    easing: fabric.util.ease.easeInSine
                 }
-                 // Ensure final state is set explicitly
-                 obj.set(targetProps);
-                 if (animationType === 'fadeIn') obj.set({ opacity: obj.appData.style?.opacity ?? 1 }); // Ensure final opacity is correct
-
-                canvas.renderAll();
-                if (onComplete) onComplete();
-            },
-            // easing: fabric.util.ease.easeInOutQuad
-         });
-     }
+            );
+        } catch (error) {
+            console.error("Pulse animation error:", error);
+            obj.set({ scaleX: originalScaleX, scaleY: originalScaleY });
+            canvas.requestRenderAll();
+            if (onComplete) onComplete();
+        }
+    }
 
   };
 })();

@@ -60,22 +60,54 @@ const EditorUI = (() => {
     }
 
     function _initSequenceList() {
-         // Initialize SortableJS on the sequence list
-        if (sequenceListContainer) {
+        sequenceListContainer = document.getElementById('sequence-list');
+        
+        if (!sequenceListContainer) {
+            console.error("Sequence list container not found. Will retry later.");
+            // Setup a retry mechanism
+            setTimeout(_initSequenceList, 500);
+            return;
+        }
+        
+        try {
+            // Destroy previous instance if it exists
+            if (sequenceSortableInstance) {
+                sequenceSortableInstance.destroy();
+            }
+            
+            // Initialize SortableJS
             sequenceSortableInstance = new Sortable(sequenceListContainer, {
-                animation: 150, // ms, animation speed moving items when sorting, `0` — without animation
-                ghostClass: 'sortable-ghost', // Class name for the drop placeholder
-                dragClass: 'sortable-drag', // Class name for the dragging item
-                onEnd: (evt) => {
-                    // evt.oldIndex, evt.newIndex
-                    const sequence = Array.from(evt.to.children).map(item => item.dataset.elementId);
-                    StateManager.setSlideSequence(sequence);
-                    // No need to re-render manually unless state was modified elsewhere
+                animation: 150,
+                ghostClass: 'sortable-ghost',
+                dragClass: 'sortable-drag',
+                onStart: function(evt) {
+                    // Add visual cue for dragging
+                    evt.item.classList.add('dragging');
+                },
+                onEnd: function(evt) {
+                    evt.item.classList.remove('dragging');
+                    
+                    // Safely get new sequence order
+                    try {
+                        const sequence = Array.from(evt.to.children)
+                            .filter(item => item.dataset && item.dataset.elementId) // Ensure valid items only
+                            .map(item => item.dataset.elementId);
+                        
+                        if (sequence.length > 0) {
+                            StateManager.setSlideSequence(sequence);
+                            console.log("Sequence updated:", sequence);
+                        }
+                    } catch (error) {
+                        console.error("Error updating sequence:", error);
+                    }
                 },
             });
-             updateSequenceList(); // Initial population
-        } else {
-            console.error("Sequence list container not found.");
+            
+            updateSequenceList(); // Initial population
+            console.log("Sequence list initialized successfully");
+        } catch (error) {
+            console.error("Error initializing sequence list:", error);
+            // Maybe try again or show error
         }
     }
 
@@ -648,83 +680,101 @@ const EditorUI = (() => {
         });
      }
 
-
     function _savePropertiesFromUI(elementId) {
-         const elementData = StateManager.getElementData(elementId); // Get current data
-         if (!elementData) return; // Should not happen if panel is visible
+        const elementData = StateManager.getElementData(elementId);
+        if (!elementData) {
+            console.error(`Element data not found for ID: ${elementId}`);
+            return false;
+        }
 
-         const updates = {
-             nickname: document.getElementById('prop-nickname')?.value || elementData.nickname,
-             // Transform properties are read directly from Fabric object during modification,
-             // but we read them back from UI inputs here for consistency or manual edits.
-             left: parseFloat(document.getElementById('prop-left')?.value || elementData.left),
-             top: parseFloat(document.getElementById('prop-top')?.value || elementData.top),
-             width: parseFloat(document.getElementById('prop-width')?.value || elementData.width),
-             height: parseFloat(document.getElementById('prop-height')?.value || elementData.height),
-             angle: parseFloat(document.getElementById('prop-angle')?.value || elementData.angle),
-             initiallyHidden: document.getElementById('prop-initiallyHidden')?.checked || false,
-             // Nested objects need careful handling - update the whole object or merge?
-             // Let's rebuild the nested objects from the UI state.
-             style: {
-                color: document.getElementById('prop-style-color')?.value || '#FFFFFF',
-                opacity: parseFloat(document.getElementById('prop-style-opacity')?.value ?? 1.0),
-                outlineEnabled: document.getElementById('prop-style-outlineEnabled')?.checked || false,
-                outlineColor: document.getElementById('prop-style-outlineColor')?.value || '#000000',
-                outlineWidth: parseInt(document.getElementById('prop-style-outlineWidth')?.value || 1),
-                // outlineStyle: ..., // Add later
-                shadowEnabled: document.getElementById('prop-style-shadowEnabled')?.checked || false,
-                shadowColor: document.getElementById('prop-style-shadowColor')?.value || '#000000',
-                shadowBlur: parseInt(document.getElementById('prop-style-shadowBlur')?.value || 5),
-                shadowOffsetX: parseInt(document.getElementById('prop-style-shadowOffsetX')?.value || 0),
-                shadowOffsetY: parseInt(document.getElementById('prop-style-shadowOffsetY')?.value || 0),
-             },
-              text: elementData.type === 'textbox' ? {
-                 content: document.getElementById('prop-text-content')?.value || '',
-                 fontSize: parseInt(document.getElementById('prop-text-fontSize')?.value || 16),
-                 fill: document.getElementById('prop-text-fill')?.value || '#333333',
-                 // Add other text props later (bold, italic etc.)
-              } : elementData.text, // Keep existing text null if not textbox
-              interactions: {
-                  triggers: {
-                      onClick: document.getElementById('prop-trigger-onClick')?.checked || false,
-                  },
-                  features: {
-                      reveal: {
-                         enabled: document.getElementById('prop-feature-revealEnabled')?.checked || false,
-                         // targetIds: ... // Get from multi-select later
-                      },
-                      spotlight: {
-                         enabled: document.getElementById('prop-feature-spotlightEnabled')?.checked || false,
-                         // type: ... // Get from dropdown later
-                      },
-                      panAndZoom: {
-                         enabled: document.getElementById('prop-feature-panZoomEnabled')?.checked || false,
-                          // targetX: ..., targetY: ..., targetZoom: ... // Get from inputs later
-                      },
-                       quiz: { // Keep existing quiz questions, only update settings from panel
-                          ...elementData.interactions?.features?.quiz, // Preserve questions array etc.
-                          enabled: document.getElementById('prop-feature-quizEnabled')?.checked || false,
-                          feedbackTiming: document.getElementById('prop-quiz-feedbackTiming')?.value || 'end',
-                          creatorEmail: document.getElementById('prop-quiz-creatorEmail')?.value || '',
-                      }
-                  }
-              }
-         };
+        try {
+            const updates = {
+                nickname: document.getElementById('prop-nickname')?.value || elementData.nickname,
+                left: parseFloat(document.getElementById('prop-left')?.value || elementData.left) || 0,
+                top: parseFloat(document.getElementById('prop-top')?.value || elementData.top) || 0,
+                width: parseFloat(document.getElementById('prop-width')?.value || elementData.width) || 100,
+                height: parseFloat(document.getElementById('prop-height')?.value || elementData.height) || 50,
+                angle: parseFloat(document.getElementById('prop-angle')?.value || elementData.angle) || 0,
+                initiallyHidden: document.getElementById('prop-initiallyHidden')?.checked || false,
+                
+                // Create a deep copy of nested objects to avoid reference issues
+                style: {
+                    color: document.getElementById('prop-style-color')?.value || '#FFFFFF',
+                    opacity: parseFloat(document.getElementById('prop-style-opacity')?.value ?? 1.0),
+                    outlineEnabled: document.getElementById('prop-style-outlineEnabled')?.checked || false,
+                    outlineColor: document.getElementById('prop-style-outlineColor')?.value || '#000000',
+                    outlineWidth: parseInt(document.getElementById('prop-style-outlineWidth')?.value || 1),
+                    shadowEnabled: document.getElementById('prop-style-shadowEnabled')?.checked || false,
+                    shadowColor: document.getElementById('prop-style-shadowColor')?.value || '#000000',
+                    shadowBlur: parseInt(document.getElementById('prop-style-shadowBlur')?.value || 5),
+                    shadowOffsetX: parseInt(document.getElementById('prop-style-shadowOffsetX')?.value || 0),
+                    shadowOffsetY: parseInt(document.getElementById('prop-style-shadowOffsetY')?.value || 0),
+                },
+                
+                // Only update text properties for textbox elements
+                text: elementData.type === 'textbox' ? {
+                    content: document.getElementById('prop-text-content')?.value || '',
+                    fontSize: parseInt(document.getElementById('prop-text-fontSize')?.value || 16),
+                    fill: document.getElementById('prop-text-fill')?.value || '#333333',
+                } : elementData.text,
+                
+                // Keep nested structure consistent
+                interactions: {
+                    triggers: {
+                        onClick: document.getElementById('prop-trigger-onClick')?.checked || false,
+                    },
+                    features: {
+                        // Create deep copies to avoid reference issues
+                        reveal: {
+                            enabled: document.getElementById('prop-feature-revealEnabled')?.checked || false,
+                            targetIds: elementData.interactions?.features?.reveal?.targetIds || [],
+                        },
+                        spotlight: {
+                            enabled: document.getElementById('prop-feature-spotlightEnabled')?.checked || false,
+                            type: elementData.interactions?.features?.spotlight?.type || 'circle',
+                        },
+                        panAndZoom: {
+                            enabled: document.getElementById('prop-feature-panZoomEnabled')?.checked || false,
+                            targetX: elementData.interactions?.features?.panAndZoom?.targetX || 0,
+                            targetY: elementData.interactions?.features?.panAndZoom?.targetY || 0,
+                            targetZoom: elementData.interactions?.features?.panAndZoom?.targetZoom || 1.5,
+                        },
+                        quiz: {
+                            // Preserve existing quiz data structure
+                            ...(elementData.interactions?.features?.quiz || { questions: [] }),
+                            enabled: document.getElementById('prop-feature-quizEnabled')?.checked || false,
+                            feedbackTiming: document.getElementById('prop-quiz-feedbackTiming')?.value || 'end',
+                            creatorEmail: document.getElementById('prop-quiz-creatorEmail')?.value || '',
+                        }
+                    }
+                }
+            };
 
-         // Apply these updates back to the StateManager
-         StateManager.updateElementData(elementId, updates);
-
-         // Also update the Fabric object to reflect the changes immediately
-         CanvasController.updateObjectFromData(elementId);
-
-         // Update sequence list potentially (if nickname changed)
-         updateSequenceList();
-         // Update quiz button text if quiz enabled/disabled
-         const quizButton = document.getElementById('edit-quiz-content-button');
-         if (quizButton) {
-              const qCount = updates.interactions.features.quiz.questions?.length || 0;
-               quizButton.textContent = `Edit Quiz Content (${qCount} Qs)`;
-         }
+            // Apply updates to StateManager
+            const success = StateManager.updateElementData(elementId, updates);
+            
+            if (success) {
+                // Update the Fabric object to match the new state
+                CanvasController.updateObjectFromData(elementId);
+                
+                // Update sequence list for nickname changes
+                updateSequenceList();
+                
+                // Update quiz button text
+                const quizButton = document.getElementById('edit-quiz-content-button');
+                if (quizButton) {
+                    const qCount = updates.interactions.features.quiz.questions?.length || 0;
+                    quizButton.textContent = `Edit Quiz Content (${qCount} Qs)`;
+                }
+                
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.error(`Error saving properties for element ${elementId}:`, error);
+            Utils.showError(`Failed to save properties: ${error.message}`);
+            return false;
+        }
     }
 
 

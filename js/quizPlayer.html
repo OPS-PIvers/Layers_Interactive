@@ -152,9 +152,7 @@ const QuizPlayer = (() => {
         const prompts = Utils.shuffleArray([...question.pairs.map(p => ({ id: p.pairId, text: p.prompt }))]);
         const answers = Utils.shuffleArray([...question.pairs.map(p => ({ id: p.pairId, text: p.answer }))]);
 
-         // Store the correct mapping for checking later
-         // We can reconstruct it from the original question.pairs if needed
-
+        // Create HTML structure
         let html = `
             <p class="help-text">Drag the answers from the right to match the prompts on the left.</p>
             <div class="quiz-matching-area">
@@ -171,7 +169,7 @@ const QuizPlayer = (() => {
                 </div>
                 <div class="quiz-matching-column" id="match-answers-col">
                     <h4>Answers (Drag these)</h4>
-                     ${answers.map(a => `
+                    ${answers.map(a => `
                         <div class="quiz-match-item" data-answer-id="${a.id}">
                             ${a.text}
                         </div>
@@ -181,44 +179,73 @@ const QuizPlayer = (() => {
         `;
         answerArea.innerHTML = html;
 
-        // Initialize SortableJS
+        // Clear previous instances
+        clearSortableInstances();
+        
+        // Initialize SortableJS with improved configuration
         const answersCol = document.getElementById('match-answers-col');
         const dropZones = document.querySelectorAll('.quiz-match-drop-zone');
+        
+        if (!answersCol || dropZones.length === 0) {
+            console.error("Required DOM elements for matching not found");
+            return;
+        }
+
+        // Create a map to track item placement
+        const placedItems = new Map();
 
         // Draggable answers pool
         sortableInstances.push(new Sortable(answersCol, {
             group: {
                 name: 'matching',
-                pull: 'clone', // Clone items when dragging out
-                put: true // Allow items to be dropped back
+                pull: 'clone', // Clone when dragging out
+                put: true // Allow return to pool
             },
-            sort: false, // Don't sort within the answer pool
+            sort: false, // Don't sort in source list
             animation: 150,
             ghostClass: 'sortable-ghost',
             dragClass: 'sortable-drag'
         }));
 
-        // Drop zones next to prompts
+        // Initialize drop zones
         dropZones.forEach(zone => {
-           sortableInstances.push(new Sortable(zone, {
+            const pairId = zone.dataset.pairId;
+            
+            sortableInstances.push(new Sortable(zone, {
                 group: {
                     name: 'matching',
-                    put: true // Accept items
+                    put: function(to, from, dragEl) {
+                        // Only allow if zone is empty or replacing existing item
+                        return to.el.children.length === 0;
+                    }
                 },
                 animation: 150,
                 ghostClass: 'sortable-ghost',
                 dragClass: 'sortable-drag',
-                onAdd: function (evt) {
-                    // Only allow one item per drop zone
+                onAdd: function(evt) {
+                    const itemId = evt.item.dataset.answerId;
+                    
+                    // Track this item's placement
+                    placedItems.set(pairId, itemId);
+                    
+                    // Add visual feedback for matching
+                    evt.item.classList.add('placed-item');
+                    zone.classList.add('has-item');
+                    
+                    // Force zone to have only one child
                     if (zone.children.length > 1) {
-                         // Move the previously dropped item back to the pool or the original zone?
-                         // Easiest is to move the *newly* added one back if zone is full.
-                        // Find the origin container (answersCol)
-                        const origin = sortableInstances[0].el; // Assuming answersCol is the first instance
-                        origin.appendChild(evt.item); // Move it back
-                        // Or prevent drop entirely? Sortable's `put` function can do this.
+                        for (let i = 0; i < zone.children.length; i++) {
+                            if (zone.children[i] !== evt.item) {
+                                // Put the old item back to the answer pool
+                                answersCol.appendChild(zone.children[i]);
+                            }
+                        }
                     }
-                     // Maybe remove the "clone" status if we want it moved permanently?
+                },
+                onRemove: function(evt) {
+                    // Clear tracking and visual feedback
+                    placedItems.delete(pairId);
+                    zone.classList.remove('has-item');
                 }
             }));
         });
@@ -286,7 +313,6 @@ const QuizPlayer = (() => {
         }
     }
 
-
     function getUserAnswer(question) {
         // Returns structured answer object or null if invalid/incomplete
         let answer = { answer: null }; // Basic structure
@@ -295,44 +321,79 @@ const QuizPlayer = (() => {
                 case 'multipleChoice':
                     const selectedRadio = answerArea.querySelector('input[name="mc-answer"]:checked');
                     if (!selectedRadio) return null; // No selection
+                    
                     const selectedOptionId = selectedRadio.value;
                     const selectedOption = question.options.find(opt => opt.optionId === selectedOptionId);
+                    
+                    if (!selectedOption) {
+                        console.error("Selected option not found in question data");
+                        return null;
+                    }
+                    
                     answer.answer = selectedOptionId; // Store ID
-                    answer.selectedText = selectedOption?.text; // Store text for results display
+                    answer.selectedText = selectedOption.text || ''; // Store text for results display
                     break;
+                    
                 case 'fillBlank':
                     const textInput = document.getElementById('fillblank-answer');
                     if (!textInput || textInput.value.trim() === '') return null;
+                    
                     answer.answer = textInput.value;
                     answer.text = textInput.value; // Store raw text
                     break;
+                    
                 case 'matching':
-                    answer.answer = []; // Array of { promptId: ..., answerId: ... }
-                    answer.matches = []; // Array of { prompt: ..., answer: ... } for display
-                    const prompts = document.querySelectorAll('#match-prompts-col .quiz-match-prompt');
+                    const matches = [];
+                    const promptElements = document.querySelectorAll('#match-prompts-col .quiz-match-prompt');
+                    
+                    // Check if all prompts have a match
                     let allMatched = true;
-                    prompts.forEach(promptDiv => {
+                    
+                    promptElements.forEach(promptDiv => {
                         const promptId = promptDiv.dataset.promptId;
                         const promptText = promptDiv.querySelector('span').textContent;
                         const dropZone = promptDiv.querySelector('.quiz-match-drop-zone');
                         const droppedItem = dropZone.querySelector('.quiz-match-item');
+                        
+                        // Get answer data, if present
                         const answerId = droppedItem?.dataset.answerId || null;
-                         const answerText = droppedItem?.textContent.trim() || null;
-
+                        const answerText = droppedItem?.textContent.trim() || null;
+                        
                         if (!answerId) allMatched = false; // Incomplete if any zone is empty
-
-                        answer.answer.push({ promptId: promptId, answerId: answerId });
-                         answer.matches.push({ prompt: promptText, answer: answerText });
+                        
+                        // Add to matches array regardless (with null if no match)
+                        matches.push({
+                            promptId: promptId,
+                            promptText: promptText,
+                            answerId: answerId,
+                            answerText: answerText
+                        });
                     });
+                    
                     if (!allMatched) return null; // Require all prompts to have a match attempted
+                    
+                    // Store both simple and detailed versions
+                    answer.answer = matches.map(m => ({ promptId: m.promptId, answerId: m.answerId }));
+                    answer.matches = matches.map(m => ({ prompt: m.promptText, answer: m.answerText }));
                     break;
+                    
                 case 'ordering':
-                    const orderedItems = answerArea.querySelectorAll('#order-drop-area .quiz-order-item span:last-child');
-                    if (orderedItems.length !== question.items.length) return null; // Should not happen
-                    answer.answer = Array.from(orderedItems).map(span => span.textContent.trim());
-                    answer.orderedItems = answer.answer; // Store for display
+                    const orderedItems = Array.from(
+                        document.querySelectorAll('#order-drop-area .quiz-order-item span:last-child')
+                    ).map(span => span.textContent.trim());
+                    
+                    if (orderedItems.length !== question.items.length) {
+                        console.error("Mismatch between ordered items and question items");
+                        return null;
+                    }
+                    
+                    answer.answer = orderedItems;
+                    answer.orderedItems = orderedItems; // Store for display
                     break;
-                default: return null; // Unknown type
+                    
+                default:
+                    console.error("Unknown question type:", question.questionType);
+                    return null;
             }
             return answer;
         } catch (error) {
@@ -340,7 +401,6 @@ const QuizPlayer = (() => {
             return null;
         }
     }
-
      function checkAnswer(question, userAnswer) {
          try {
             switch (question.questionType) {
@@ -411,30 +471,49 @@ const QuizPlayer = (() => {
         const score = calculateScore();
         console.log("Final Score:", score);
 
+        // Store completion time
+        const completionTime = Date.now() - quizStartTime;
+        
+        // Keep reference to callback since it might be lost if quiz is reset
+        const completionCallback = onQuizCompleteCallback;
+
         // Handle feedback based on timing setting
         switch (currentQuiz.feedbackTiming) {
             case 'none':
                 // No results shown, just complete the interaction
-                 if (onQuizCompleteCallback) onQuizCompleteCallback();
+                console.log("Quiz feedback timing: none");
+                if (completionCallback) {
+                    setTimeout(completionCallback, 50); // Small delay
+                }
                 break;
-            case 'each':
-                // Feedback was shown after each question. Just complete.
-                 if (onQuizCompleteCallback) onQuizCompleteCallback();
+                
+            case 'each': 
+                // Feedback was shown after each question
+                console.log("Quiz feedback timing: each question");
+                if (completionCallback) {
+                    setTimeout(completionCallback, 50); // Small delay
+                }
                 break;
+                
             case 'end':
+            case 'emailUser':
+            case 'emailCreator':
                 // Show results modal with score
+                console.log("Quiz feedback timing:", currentQuiz.feedbackTiming);
                 showResultsModal(score);
                 // onQuizCompleteCallback is called when results modal is closed
                 break;
-            case 'emailUser':
-            case 'emailCreator':
-                 // Show results modal, which includes email logic/confirmation
-                 showResultsModal(score);
-                 // onQuizCompleteCallback is called when results modal is closed
-                 break;
+                
             default:
-                 if (onQuizCompleteCallback) onQuizCompleteCallback(); // Failsafe
+                console.warn("Unknown feedback timing:", currentQuiz.feedbackTiming);
+                if (completionCallback) {
+                    setTimeout(completionCallback, 50); // Small delay
+                }
         }
+        
+        // Reset internal state for next quiz
+        // Keep userAnswers and currentQuiz for results display
+        currentQuestionIndex = 0;
     }
 
     function calculateScore() {
@@ -470,14 +549,27 @@ const QuizPlayer = (() => {
          resultsModal.classList.add('active');
      }
 
-     function closeResultsModal() {
+    function closeResultsModal() {
+        if (!resultsModal) return;
+        
         resultsModal.classList.remove('active');
-        // Trigger the completion callback *after* the results modal is closed
-        if (onQuizCompleteCallback) {
-             console.log("Results modal closed, triggering completion callback.");
-             onQuizCompleteCallback();
+        
+        // Store reference to callback before clearing state
+        const callback = onQuizCompleteCallback;
+        
+        // Reset state
+        currentQuiz = null;
+        currentElementData = null;
+        userAnswers = {};
+        quizStartTime = null;
+        onQuizCompleteCallback = null;
+        
+        // Trigger the completion callback after the modal is closed and state is reset
+        if (callback) {
+            console.log("Results modal closed, triggering completion callback");
+            setTimeout(callback, 0); // Use setTimeout to ensure UI updates first
         }
-     }
+    }
 
     function prepareResultsPayload(score) {
         // Structure data for backend email function
@@ -498,7 +590,9 @@ const QuizPlayer = (() => {
 
     async function handleSendEmailToUser() {
         const userEmail = resultsEmailInput.value;
-        if (!userEmail || !/\S+@\S+\.\S+/.test(userEmail)) {
+        
+        // Improved validation
+        if (!userEmail || !/^\S+@\S+\.\S+$/.test(userEmail)) {
             resultsEmailStatus.textContent = 'Please enter a valid email address.';
             resultsEmailStatus.className = 'error';
             return;
@@ -509,46 +603,54 @@ const QuizPlayer = (() => {
         resultsEmailStatus.className = 'info';
 
         try {
-            const score = calculateScore(); // Recalculate or use stored score?
+            const score = calculateScore();
             const payload = prepareResultsPayload(score);
+            
+            // Validate payload before sending
+            if (!payload || !payload.questions || !payload.userAnswers) {
+                throw new Error("Invalid quiz data for email");
+            }
+            
             await ServerClient.sendQuizToUser(payload, userEmail);
             resultsEmailStatus.textContent = 'Results sent successfully!';
             resultsEmailStatus.className = 'success';
-             // Optionally close modal after a short delay?
-             setTimeout(closeResultsModal, 1500);
+            
+            // Close modal after a short delay
+            setTimeout(closeResultsModal, 1500);
         } catch (error) {
             console.error("Error sending email to user:", error);
             resultsEmailStatus.textContent = `Error: ${error.message}`;
             resultsEmailStatus.className = 'error';
-            resultsSendButton.disabled = false; // Re-enable button on error
+            resultsSendButton.disabled = false; // Re-enable for retry
         }
     }
 
-     async function handleSendEmailToCreator(score) {
-         const creatorEmail = currentQuiz.creatorEmail;
-          if (!creatorEmail || !/\S+@\S+\.\S+/.test(creatorEmail)) {
-             resultsEmailStatusCreator.textContent = 'Error: Creator email address is invalid in quiz configuration.';
-              resultsEmailStatusCreator.className = 'error';
-             return; // Don't proceed
-         }
+    async function handleSendEmailToCreator(score) {
+        const creatorEmail = currentQuiz.creatorEmail;
+        
+        if (!creatorEmail || !/^\S+@\S+\.\S+$/.test(creatorEmail)) {
+            resultsEmailStatusCreator.textContent = 'Error: Creator email address is invalid in quiz configuration.';
+            resultsEmailStatusCreator.className = 'error';
+            return; // Don't proceed
+        }
 
-         resultsEmailStatusCreator.textContent = 'Sending results to creator...';
-          resultsEmailStatusCreator.className = 'info';
+        resultsEmailStatusCreator.textContent = 'Sending results to creator...';
+        resultsEmailStatusCreator.className = 'info';
 
-         try {
-             const payload = prepareResultsPayload(score);
-             // Add user info if possible/allowed (Apps Script session user)
-             // The backend function Code.gs already does this.
-             await ServerClient.sendQuizToCreator(payload, creatorEmail);
-             resultsEmailStatusCreator.textContent = 'Results sent to creator.';
-             resultsEmailStatusCreator.className = 'success';
-         } catch (error) {
-             console.error("Error sending email to creator:", error);
-             resultsEmailStatusCreator.textContent = `Error sending: ${error.message}`;
-              resultsEmailStatusCreator.className = 'error';
-              // Don't disable close button
-         }
-     }
+        try {
+            const payload = prepareResultsPayload(score);
+            // Add user info if possible/allowed (Apps Script session user)
+            // The backend function Code.gs already does this.
+            await ServerClient.sendQuizToCreator(payload, creatorEmail);
+            resultsEmailStatusCreator.textContent = 'Results sent to creator.';
+            resultsEmailStatusCreator.className = 'success';
+        } catch (error) {
+            console.error("Error sending email to creator:", error);
+            resultsEmailStatusCreator.textContent = `Error sending: ${error.message}`;
+            resultsEmailStatusCreator.className = 'error';
+            // Don't disable close button
+        }
+    }
 
 
     // --- Utility ---

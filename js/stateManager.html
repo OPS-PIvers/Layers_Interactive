@@ -43,11 +43,11 @@ const StateManager = (() => {
       };
   }
 
-   function _resetViewerState() {
-        viewerState.currentSequenceIndex = -1;
-        viewerState.actionHistory = [];
-        viewerState.isSequenceActive = false;
-   }
+  function _resetViewerState() {
+      viewerState.currentSequenceIndex = -1;
+      viewerState.actionHistory = [];
+      viewerState.isSequenceActive = false;
+  }
 
    function _touch() {
         isDirty = true;
@@ -59,6 +59,28 @@ const StateManager = (() => {
              EditorUI.updateSaveStatus(isDirty);
         }
    }
+
+  // Helper for deep merging objects (used by updateElementData)
+  function _deepMerge(target, source) {
+    if (!source) return target;
+    
+    for (const key in source) {
+      if (source.hasOwnProperty(key)) {
+        if (source[key] !== null && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+          // If property is an object and not null or an array
+          if (!target[key] || typeof target[key] !== 'object') {
+            target[key] = {};
+          }
+          _deepMerge(target[key], source[key]);
+        } else {
+          // For primitives, arrays, or null values, just copy directly
+          target[key] = source[key];
+        }
+      }
+    }
+    return target;
+  }
+
 
   // --- Public API ---
   return {
@@ -208,22 +230,34 @@ const StateManager = (() => {
     updateElementData(elementId, newData) {
       const slide = this.getCurrentSlide();
       if (!slide) return false;
+      
       const element = slide.elements.find(el => el.id === elementId);
-      if (element) {
-        // Deep merge might be needed for nested objects like 'style' or 'interactions'
-        // Simple Object.assign overwrites nested objects entirely.
-        // For now, let's assume newData contains the full structure for simplicity,
-        // but a recursive merge would be more robust.
-        Object.assign(element, newData);
+      if (!element) {
+        console.warn("Element not found for update:", elementId);
+        return false;
+      }
+      
+      try {
+        // Apply updates using deep merge for nested properties
+        this._deepMerge(element, newData);
+        
         // Ensure required nested structures exist
         element.interactions = element.interactions || { triggers: {}, features: {} };
+        element.interactions.triggers = element.interactions.triggers || {};
+        element.interactions.features = element.interactions.features || {};
+        
         element.style = element.style || {};
+        
+        if (element.type === 'textbox') {
+          element.text = element.text || {};
+        }
+        
         _touch();
-        // console.log("Updated data for element:", elementId, newData); // Can be noisy
         return true;
+      } catch (e) {
+        console.error(`Error updating element data for ${elementId}:`, e);
+        return false;
       }
-      console.warn("Element not found for update:", elementId);
-      return false;
     },
 
     addElementData(elementData) {
@@ -308,19 +342,35 @@ const StateManager = (() => {
     // or { type: 'zoom', previousViewport: [...] }
     // or { type: 'quiz_trigger', elementId: '...', previousState: {...} }
     addActionToHistory(action) {
-      // In simple undo mode, history might just track the index
-      // In full undo mode, it tracks detailed state changes
-      viewerState.actionHistory.push(action);
-       if (typeof InteractionHandler !== 'undefined' && InteractionHandler.updateNavUI) {
-          InteractionHandler.updateNavUI(); // Update prev button state
-       }
+        // Limit history length to prevent memory issues
+        if (viewerState.actionHistory.length >= 100) {
+            viewerState.actionHistory.shift(); // Remove oldest action
+        }
+        
+        // Ensure action has basic required properties
+        if (!action.index && action.index !== 0) {
+            console.warn("Adding action without valid index to history");
+            action.index = viewerState.currentSequenceIndex - 1;
+        }
+        
+        if (!action.preStateSnapshot) {
+            console.warn("Adding action without state snapshot to history");
+            action.preStateSnapshot = {};
+        }
+        
+        viewerState.actionHistory.push(action);
+        
+        // Update UI if InteractionHandler is available
+        if (typeof InteractionHandler !== 'undefined' && InteractionHandler.updateNavUI) {
+          InteractionHandler.updateNavUI();
+        }
     },
     popActionFromHistory() {
-      const action = viewerState.actionHistory.pop();
-       if (typeof InteractionHandler !== 'undefined' && InteractionHandler.updateNavUI) {
+        const action = viewerState.actionHistory.pop();
+        if (typeof InteractionHandler !== 'undefined' && InteractionHandler.updateNavUI) {
           InteractionHandler.updateNavUI(); // Update prev button state
-       }
-       return action;
+        }
+        return action;
     },
     getPreviousAction() {
         return viewerState.actionHistory.length > 0 ? viewerState.actionHistory[viewerState.actionHistory.length - 1] : null;
