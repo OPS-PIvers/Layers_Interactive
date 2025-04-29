@@ -1,671 +1,183 @@
-<script>
 const CanvasController = (() => {
-  let canvas = null;
-  let currentSlideBg = { type: 'color', value: '#FFFFFF' }; // Track background
-  let isEditor = false;
-
-  // --- Private Fabric Helpers ---
-
-  // Extended properties for serialization (include custom appData)
-  const FABRIC_PROPS_TO_INCLUDE = [
-      'id', 'appData', 'selectable', 'evented' // Include custom id and appData
-      // Add other props if needed, like objectCaching for performance tuning
-  ];
-
-  function _initCanvas(id, editorMode = true) {
-    isEditor = editorMode;
-    canvas = new fabric.Canvas(id, {
-      preserveObjectStacking: true,
-      backgroundColor: '#FFFFFF', // Default background
-      // Optimization flags (experiment as needed)
-      // renderOnAddRemove: false, // Batch renders manually if needed
-      // objectCaching: false, // Can sometimes interfere with complex styles/groups
-      selection: isEditor, // Disable selection in viewer mode
-      controlsAboveOverlay: true,
-    });
-
-    if (isEditor) {
-      // Editor-specific event listeners
-      canvas.on({
-        'selection:created': _handleSelectionChange,
-        'selection:updated': _handleSelectionChange,
-        'selection:cleared': _handleSelectionChange,
-        'object:modified': _handleObjectModified, // After move, scale, rotate
+    let canvas = null;
+    let currentSlideBg = { type: 'color', value: '#FFFFFF' }; // Track background
+    let isEditor = false;
+  
+    // --- Private Fabric Helpers ---
+  
+    // Extended properties for serialization (include custom appData)
+    const FABRIC_PROPS_TO_INCLUDE = [
+        'id', 'appData', 'selectable', 'evented' // Include custom id and appData
+        // Add other props if needed, like objectCaching for performance tuning
+    ];
+  
+    function _initCanvas(id, editorMode = true) {
+      isEditor = editorMode;
+      canvas = new fabric.Canvas(id, {
+        preserveObjectStacking: true,
+        backgroundColor: '#FFFFFF', // Default background
+        // Optimization flags (experiment as needed)
+        // renderOnAddRemove: false, // Batch renders manually if needed
+        // objectCaching: false, // Can sometimes interfere with complex styles/groups
+        selection: isEditor, // Disable selection in viewer mode
+        controlsAboveOverlay: true,
       });
-      
-      // Handle delete key
-      window.addEventListener('keydown', (e) => {
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-          if (canvas.getActiveObject() && isEditor) {
-            deleteSelectedObject();
+  
+      if (isEditor) {
+        // Editor-specific event listeners
+        canvas.on({
+          'selection:created': _handleSelectionChange,
+          'selection:updated': _handleSelectionChange,
+          'selection:cleared': _handleSelectionChange,
+          'object:modified': _handleObjectModified, // After move, scale, rotate
+        });
+        
+        // Handle delete key
+        window.addEventListener('keydown', (e) => {
+          if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (canvas.getActiveObject() && isEditor) {
+              deleteSelectedObject();
+            }
           }
-        }
-      });
-    } else {
-      // Viewer-specific settings
-      canvas.selection = false; // Ensure selection is off
-      canvas.hoverCursor = 'pointer'; // Indicate clickable items
-      canvas.defaultCursor = 'default';
-    }
-
-    window.addEventListener('resize', Utils.debounce(_resizeCanvas, 250));
-    _resizeCanvas(); // Initial size calculation
-    console.log(`Canvas initialized for ${isEditor ? 'Editor' : 'Viewer'}`);
-  }
-
-  // And in the public API section, replace the existing resizeCanvas with:
-  resizeCanvas() {
-    _resizeCanvas();
-  }
-
-  // Add this private function inside the CanvasController IIFE before the return statement
-  // Place it with the other private functions like _handleSelectionChange, etc.
-  function _resizeCanvas() {
-    if (!canvas || !canvas.wrapperEl) return;
-    const container = canvas.wrapperEl.parentNode;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-
-    canvas.setWidth(width);
-    canvas.setHeight(height);
-
-    // Optional: Adjust zoom to fit content if needed, especially in viewer
-    // if (!isEditor) { /* ... logic to fit bounds ... */ }
-
-    canvas.renderAll();
-  }
-
-  // Then in _initCanvas function, find this line:
-  window.addEventListener('resize', Utils.debounce(resizeCanvas, 250));
-
-  // And change it to:
-  window.addEventListener('resize', Utils.debounce(_resizeCanvas, 250));
-
-  // Then in the public API section, replace the existing resizeCanvas method with:
-  resizeCanvas() {
-    _resizeCanvas();
-  }
-
-  function _handleSelectionChange() {
-      if (!isEditor) return;
-      const activeObject = canvas.getActiveObject();
-      EditorUI.updatePropertiesPanel(activeObject); // Update sidebar
-      EditorUI.updateToolbarState(!!activeObject); // Enable/disable delete button etc.
-  }
-
-  function _handleObjectModified(e) {
-    if (!isEditor || !e.target) return;
-    const obj = e.target;
-    const elementData = StateManager.getElementData(obj.id);
-
-    if (elementData) {
-        // Store original dimensions for comparison
-        const originalWidth = elementData.width || 100;
-        const originalHeight = elementData.height || 50;
-        
-        // Calculate new dimensions while preserving aspect ratio if shift was held
-        const newWidth = obj.getScaledWidth();
-        const newHeight = obj.getScaledHeight();
-        
-        const updates = {
-            left: obj.left,
-            top: obj.top,
-            angle: obj.angle,
-            width: newWidth,
-            height: newHeight,
-            // Store current scale factors in the state
-            scaleX: obj.scaleX,
-            scaleY: obj.scaleY
-        };
-
-        // Special handling for textboxes
-        if (obj.type === 'textbox') {
-            // For textboxes, we need to handle width differently to maintain text wrapping
-            updates.width = obj.width * obj.scaleX;
-            updates.scaleX = 1; // Reset only X scale for textboxes
-            updates.scaleY = obj.scaleY; // Preserve Y scale for text sizing
-        }
-
-        StateManager.updateElementData(obj.id, updates);
-        
-        // Only reset scale if it's not a textbox
-        if (obj.type !== 'textbox') {
-            obj.set({
-                width: newWidth,
-                height: newHeight,
-                scaleX: 1,
-                scaleY: 1
-            });
-        }
-
-        // Update UI
-        EditorUI.updatePropertiesPanel(obj);
-        canvas.requestRenderAll();
-    }
-  }
-
-  function _applyStyle(fabricObject, styleData) {
-      if (!fabricObject || !styleData) return;
-
-       const styleUpdates = {};
-       if (styleData.color) styleUpdates.fill = styleData.color;
-       if (styleData.opacity !== undefined) styleUpdates.opacity = styleData.opacity;
-
-       // Outline (Stroke)
-       if (styleData.outlineEnabled) {
-           styleUpdates.stroke = styleData.outlineColor || '#000000';
-           styleUpdates.strokeWidth = styleData.outlineWidth || 1;
-           styleUpdates.strokeDashArray = styleData.outlineStyle === 'dashed' ? [5, 5] : (styleData.outlineStyle === 'dotted' ? [1, 3] : null);
-       } else {
-           styleUpdates.stroke = null; // Remove stroke if disabled
-           styleUpdates.strokeWidth = 0;
-       }
-
-       // Shadow
-       if (styleData.shadowEnabled) {
-           fabricObject.shadow = new fabric.Shadow({
-               color: styleData.shadowColor || 'rgba(0,0,0,0.5)',
-               blur: styleData.shadowBlur || 5,
-               offsetX: styleData.shadowOffsetX || 3,
-               offsetY: styleData.shadowOffsetY || 3,
-           });
-       } else {
-           fabricObject.shadow = null; // Remove shadow
-       }
-
-        fabricObject.set(styleUpdates);
-        // Note: Animation is handled by InteractionHandler, not direct style application
-  }
-
-   function _applyTextProperties(fabricTextObject, textData) {
-       if (!fabricTextObject || !textData) return;
-       const textUpdates = {};
-       if (textData.content !== undefined) textUpdates.text = textData.content;
-       if (textData.fontSize) textUpdates.fontSize = textData.fontSize;
-       if (textData.fontFamily) textUpdates.fontFamily = textData.fontFamily; // Add dropdown later
-       if (textData.fontWeight) textUpdates.fontWeight = textData.fontWeight; // bold
-       if (textData.fontStyle) textUpdates.fontStyle = textData.fontStyle; // italic
-       if (textData.underline) textUpdates.underline = textData.underline;
-       if (textData.textAlign) textUpdates.textAlign = textData.textAlign; // left, center, right
-       if (textData.lineHeight) textUpdates.lineHeight = textData.lineHeight;
-       if (textData.fill) textUpdates.fill = textData.fill; // Text color
-
-       fabricTextObject.set(textUpdates);
-   }
-
-
-  // --- Public API ---
-  return {
-    initCanvas: _initCanvas,
-
-    getCanvas: () => canvas, // Expose canvas instance carefully
-
-    resizeCanvas() {
-        if (!canvas || !canvas.wrapperEl) return;
-        const container = canvas.wrapperEl.parentNode;
-        const width = container.clientWidth;
-        const height = container.clientHeight;
-
-        canvas.setWidth(width);
-        canvas.setHeight(height);
-
-        // Optional: Adjust zoom to fit content if needed, especially in viewer
-        // if (!isEditor) { /* ... logic to fit bounds ... */ }
-
-        canvas.renderAll();
-    },
-
-    loadSlide(slideData) {
-        if (!canvas || !slideData) {
-            console.error("Canvas or slide data not available for loading.");
-            return;
-        }
-        canvas.clear(); // Clear existing objects
-        _resetViewport(); // Reset zoom/pan
-
-        // Set background (Image or Color)
-        if (slideData.imageFileId) {
-            currentSlideBg = { type: 'image', value: slideData.imageFileId };
-            Utils.showLoadingIndicator(true, 'Loading Background...');
-            ServerClient.loadImage(slideData.imageFileId)
-                .then(dataUrl => {
-                    fabric.Image.fromURL(dataUrl, (img) => {
-                        canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
-                            // Scale image to fit canvas dimensions? Or use original size?
-                            // Let's try scaling to fit the initial canvas size.
-                            scaleX: canvas.width / img.width,
-                            scaleY: canvas.height / img.height,
-                            originX: 'left',
-                            originY: 'top'
-                            // TODO: Store background scaling/position?
-                        });
-                    });
-                })
-                .catch(err => {
-                    console.error("Failed to load background image:", err);
-                    Utils.showError(`Failed to load background: ${err.message}`);
-                    canvas.setBackgroundColor(slideData.backgroundColor || '#FFFFFF', canvas.renderAll.bind(canvas));
-                })
-                .finally(() => Utils.showLoadingIndicator(false));
-
-        } else {
-            currentSlideBg = { type: 'color', value: slideData.backgroundColor || '#FFFFFF' };
-            canvas.setBackgroundColor(currentSlideBg.value, canvas.renderAll.bind(canvas));
-            canvas.backgroundImage = null; // Ensure no old image persists
-        }
-
-
-        // Add elements from slide data
-        if (slideData.elements && slideData.elements.length > 0) {
-            // Use requestIdleCallback or setTimeout to avoid blocking UI thread if many objects
-             setTimeout(() => {
-                slideData.elements.forEach(elementData => this.addObject(elementData, false)); // Add without immediate render
-                canvas.renderAll(); // Render all at once after adding
-                console.log(`Loaded ${slideData.elements.length} elements for slide ${slideData.slideId}`);
-             }, 10); // Small delay
-        } else {
-             canvas.renderAll(); // Render background even if no elements
-        }
-
-        // Set initial visibility based on sequence (if applicable)
-        InteractionHandler.applyInitialSequenceState();
-    },
-
-    // Add a single object to the canvas based on element data
-    // Can be called during slide load or when user adds new element
-    addObject(elementData, render = true) {
-      if (!canvas || !elementData) return null;
-
-      let fabricObject;
-      const commonOptions = {
-        left: elementData.left || 50, // Default position
-        top: elementData.top || 50,
-        angle: elementData.angle || 0,
-        originX: 'left', // Use consistent origins
-        originY: 'top',
-        // Fabric-specific props
-        borderColor: 'blue',
-        cornerColor: 'blue',
-        cornerSize: 8,
-        transparentCorners: false,
-        // Custom data storage
-        id: elementData.id || Utils.generateUUID(), // Ensure ID exists
-        appData: elementData // Store the full state manager data here
-      };
-
-       // Apply initial styles (color, opacity, etc.) - BEFORE creating object if possible
-       commonOptions.fill = elementData.style?.color || '#FF4136'; // Default Red
-       commonOptions.opacity = elementData.style?.opacity ?? 1.0; // Use nullish coalescing
-
-
-      // --- Object Creation by Type ---
-      switch (elementData.type) {
-        case 'rect':
-          fabricObject = new fabric.Rect({
-            ...commonOptions,
-            width: elementData.width || 100,
-            height: elementData.height || 50,
-          });
-          break;
-
-        case 'ellipse':
-          fabricObject = new fabric.Ellipse({
-            ...commonOptions,
-            rx: (elementData.width || 100) / 2, // Ellipse uses radius
-            ry: (elementData.height || 50) / 2,
-          });
-          break;
-
-        case 'textbox':
-           // Textbox is special, style applies to text content mainly
-           commonOptions.fill = elementData.text?.fill || '#333333'; // Text color default
-           fabricObject = new fabric.Textbox(elementData.text?.content || 'New Text', {
-                ...commonOptions,
-                width: elementData.width || 150,
-                fontSize: elementData.text?.fontSize || 16,
-                // Other text props applied via _applyTextProperties later
-                // Make background transparent by default unless specified
-                backgroundColor: elementData.style?.backgroundColor || 'rgba(0,0,0,0)',
-                padding: 5 // Add some padding
-           });
-           _applyTextProperties(fabricObject, elementData.text);
-           break;
-
-        // --- TODO: Text on Shape (Group) ---
-        // case 'shapeWithText': // Example: a rect with text inside
-        //   const shape = new fabric.Rect({ /* shape options */ });
-        //   const text = new fabric.Textbox('Text', { /* text options relative to shape */ });
-        //   fabricObject = new fabric.Group([shape, text], { ...commonOptions });
-        //   // Need logic to handle group resizing, text wrapping, and saving/loading group structure
-        //   break;
-
-        default:
-          console.warn("Unsupported element type:", elementData.type);
-          return null;
+        });
+      } else {
+        // Viewer-specific settings
+        canvas.selection = false; // Ensure selection is off
+        canvas.hoverCursor = 'pointer'; // Indicate clickable items
+        canvas.defaultCursor = 'default';
       }
-
-      // Apply common styles (outline, shadow) after object creation
-      _applyStyle(fabricObject, elementData.style);
-
-      // Apply initial visibility (often handled by sequence handler)
-       if (elementData.initiallyHidden) {
-           fabricObject.visible = false;
-       }
-
-       // Set selectability/eventing based on mode
-       fabricObject.selectable = isEditor;
-       fabricObject.evented = true; // Always allow events (clicks)
-
-      // Add to canvas
-      canvas.add(fabricObject);
-
-       // Attach interaction listeners (Viewer and Editor might need different ones?)
-       InteractionHandler.attachListenersToObject(fabricObject);
-
-      if (render) {
-        canvas.requestRenderAll(); // Request render instead of immediate
-      }
-
-      return fabricObject; // Return the created fabric object
-    },
-
-    updateObjectFromData(elementId) {
-        const fabricObj = this.getObjectById(elementId);
-        const elementData = StateManager.getElementData(elementId);
-        
-        if (!fabricObj || !elementData) {
-            console.error(`Cannot update object: fabricObj=${!!fabricObj}, elementData=${!!elementData}`);
-            return false;
-        }
-        
-        try {
-            // Update basic properties
-            const updates = {
-                left: elementData.left || 0,
-                top: elementData.top || 0,
-                angle: elementData.angle || 0,
-            };
-            
-            // Update dimensions carefully based on type
-            if (fabricObj.type === 'rect' || fabricObj.type === 'textbox') {
-                updates.width = elementData.width || 100;
-                updates.height = elementData.height || 50;
-            } else if (fabricObj.type === 'ellipse') {
-                updates.rx = (elementData.width || 100) / 2;
-                updates.ry = (elementData.height || 50) / 2;
-            }
-            
-            // Reset scale factors
-            updates.scaleX = 1;
-            updates.scaleY = 1;
-            
-            // Apply position and dimension updates
-            fabricObj.set(updates);
-            
-            // Apply styles
-            _applyStyle(fabricObj, elementData.style);
-            
-            // Apply text properties for textbox
-            if (fabricObj.type === 'textbox' && elementData.text) {
-                _applyTextProperties(fabricObj, elementData.text);
-            }
-            
-            // Update visibility
-            fabricObj.visible = !elementData.initiallyHidden;
-            
-            // Update the stored appData reference
-            fabricObj.appData = elementData;
-            
-            canvas.requestRenderAll();
-            return true;
-        } catch (error) {
-            console.error(`Error updating object ${elementId}:`, error);
-            return false;
-        }
+  
+      window.addEventListener('resize', Utils.debounce(_resizeCanvas, 250));
+      _resizeCanvas(); // Initial size calculation
+      console.log(`Canvas initialized for ${isEditor ? 'Editor' : 'Viewer'}`);
     }
-
-    removeObjectById(elementId) {
-      const obj = this.getObjectById(elementId);
-      if (obj) {
-        canvas.remove(obj);
-        canvas.requestRenderAll();
-        return true;
-      }
-      return false;
-    },
-
-    deleteSelectedObject() {
+  
+    function _resizeCanvas() {
+      if (!canvas || !canvas.wrapperEl) return;
+      const container = canvas.wrapperEl.parentNode;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+  
+      canvas.setWidth(width);
+      canvas.setHeight(height);
+  
+      // Optional: Adjust zoom to fit content if needed, especially in viewer
+      // if (!isEditor) { /* ... logic to fit bounds ... */ }
+  
+      canvas.renderAll();
+    }
+  
+    function _handleSelectionChange() {
         if (!isEditor) return;
         const activeObject = canvas.getActiveObject();
-        if (activeObject) {
-            // If it's a multi-selection (ActiveSelection)
-            if (activeObject.type === 'activeSelection') {
-                activeObject.forEachObject(obj => {
-                    StateManager.removeElementData(obj.id); // Remove from state
-                    canvas.remove(obj); // Remove from canvas
-                });
-            } else {
-                // Single object selected
-                 StateManager.removeElementData(activeObject.id);
-                 canvas.remove(activeObject);
-            }
-            canvas.discardActiveObject(); // Deselect
-            canvas.requestRenderAll();
-             EditorUI.updateSequenceList(); // Update sequence list as element is gone
-        }
-    },
-
-
-    getObjectById(id) {
-      return canvas.getObjects().find(o => o.id === id);
-    },
-
-    setActiveObject(elementId) {
-        if (!isEditor) return;
-        const obj = this.getObjectById(elementId);
-        if (obj) {
-            canvas.setActiveObject(obj);
-            canvas.renderAll();
-        } else {
-             canvas.discardActiveObject();
-             canvas.renderAll();
-        }
-        // Update properties panel
-        _handleSelectionChange();
-    },
-
-     getActiveObjectId() {
-        if (!isEditor) return null;
-        const activeObj = canvas.getActiveObject();
-        // Handle single vs multi-selection if needed differently
-        return activeObj?.id;
-     },
-
-    // --- Viewport Manipulation (Pan/Zoom) ---
-    getViewportTransform() {
-        return canvas.viewportTransform; // [scaleX, skewY, skewX, scaleY, translateX, translateY]
-    },
-
-    setViewportTransform(transformArray, render = true) {
-        canvas.setViewportTransform(transformArray);
-        if (render) canvas.requestRenderAll();
-    },
-
-    zoomToPoint(point, zoomFactor, render = true) {
-        // point is { x: ..., y: ... } in canvas coords
-        canvas.zoomToPoint(point, zoomFactor);
-        if (render) canvas.requestRenderAll();
-    },
-
-    pan(deltaX, deltaY, render = true) {
-        canvas.relativePan(new fabric.Point(deltaX, deltaY));
-         if (render) canvas.requestRenderAll();
-    },
-
-    animateViewport(targetTransform, duration = 500, onComplete = null) {
-        const startTransform = this.getViewportTransform();
-        fabric.util.animate({
-            startValue: startTransform,
-            endValue: targetTransform,
-            duration: duration,
-            onChange: (value) => {
-                this.setViewportTransform(value, true); // Render each step
-            },
-            onComplete: () => {
-                 this.setViewportTransform(targetTransform, true); // Ensure final state
-                 if (onComplete) onComplete();
-            },
-            // easing: fabric.util.ease.easeInOutQuad // Add easing
-        });
-    },
-
-    _resetViewport() {
-        this.setViewportTransform([1, 0, 0, 1, 0, 0]); // Default transform (scale 1, no translation)
-    },
-
-    // --- Background Image Handling ---
-    async setBackgroundImage(imageFileId) {
-        if (!canvas) return;
-        Utils.showLoadingIndicator(true, 'Setting Background...');
-        
-        try {
-            const dataUrl = await ServerClient.loadImage(imageFileId);
-            
-            // Convert callback to Promise for better async handling
-            await new Promise((resolve, reject) => {
-                fabric.Image.fromURL(dataUrl, (img) => {
-                    if (!img) {
-                        reject(new Error("Failed to create image from URL"));
-                        return;
-                    }
-                    
-                    // Calculate proper scaling
-                    const slide = StateManager.getCurrentSlide();
-                    const targetWidth = slide?.imageWidth || canvas.width;
-                    const targetHeight = slide?.imageHeight || canvas.height;
-                    
-                    // Set background with proper scaling
-                    canvas.setBackgroundImage(img, () => {
-                        // Update state only after background is set
-                        StateManager.updateSlideProperties(StateManager.getCurrentSlideId(), {
-                            imageFileId: imageFileId,
-                            imageUrl: `drive://${imageFileId}`,
-                            imageWidth: img.width,
-                            imageHeight: img.height,
-                            backgroundColor: null
-                        });
-                        
-                        currentSlideBg = { type: 'image', value: imageFileId };
-                        
-                        // Render after all updates
-                        canvas.renderAll();
-                        resolve();
-                    }, {
-                        scaleX: targetWidth / img.width,
-                        scaleY: targetHeight / img.height,
-                        originX: 'left',
-                        originY: 'top'
-                    });
-                });
-            });
-            
-            // Update UI only after everything is complete
-            if (typeof EditorUI !== 'undefined' && EditorUI.updateSlideBackgroundDisplay) {
-                EditorUI.updateSlideBackgroundDisplay(imageFileId, "Image Loaded");
-            }
-        } catch (error) {
-            console.error("Error setting background image:", error);
-            Utils.showError(`Failed to set background: ${error.message}`);
-        } finally {
-            Utils.showLoadingIndicator(false);
-        }
+        EditorUI.updatePropertiesPanel(activeObject); // Update sidebar
+        EditorUI.updateToolbarState(!!activeObject); // Enable/disable delete button etc.
     }
-
-    clearBackgroundImage() {
-         if (!canvas) return;
-         canvas.setBackgroundImage(null, canvas.renderAll.bind(canvas));
-         canvas.setBackgroundColor('#FFFFFF', canvas.renderAll.bind(canvas)); // Reset to default color
-         StateManager.updateSlideProperties(StateManager.getCurrentSlideId(), {
-             imageFileId: null,
-             imageUrl: null,
-             backgroundColor: '#FFFFFF'
-         });
-         currentSlideBg = { type: 'color', value: '#FFFFFF' };
-         EditorUI.updateSlideBackgroundDisplay(null);
-    },
-
-    // --- Animation ---
-    animateObject(elementId, animationType, duration = 500, onComplete = null) {
-        const obj = this.getObjectById(elementId);
-        if (!obj) {
-            console.error(`Cannot animate: Object with ID ${elementId} not found`);
-            if (onComplete) onComplete();
-            return;
-        }
-
-        let targetProps = {};
-        let startProps = {}; // Store initial state for potential reversal
-
-        try {
-            switch (animationType) {
-                case 'fadeIn':
-                    startProps = { opacity: 0 };
-                    // Fade to element's defined opacity or default to 1
-                    targetProps = { opacity: obj.appData?.style?.opacity ?? 1 };
-                    obj.set('opacity', 0); // Start transparent
-                    obj.visible = true; // Make sure it's visible for animation
-                    break;
-                case 'fadeOut':
-                    startProps = { opacity: obj.opacity };
-                    targetProps = { opacity: 0 };
-                    obj.visible = true;
-                    break;
-                case 'pulse': // Multiple steps animation with callback chain
-                    const originalScaleX = obj.scaleX || 1;
-                    const originalScaleY = obj.scaleY || 1;
-                    startProps = { scaleX: originalScaleX, scaleY: originalScaleY};
-                    targetProps = { scaleX: originalScaleX * 1.2, scaleY: originalScaleY * 1.2 };
-                    obj.visible = true;
-                    
-                    // Chain animations with callbacks
-                    return this._runPulseAnimation(obj, originalScaleX, originalScaleY, duration, onComplete);
-                    
-                // Add more cases as needed
-                default:
-                    console.warn(`Unsupported animation type: ${animationType}`);
-                    if (onComplete) onComplete();
-                    return;
-            }
-
-            // Apply start state if needed
-            obj.set(startProps);
-            canvas.requestRenderAll();
-
-            // Use Fabric animation
-            obj.animate(targetProps, {
-                duration: duration,
-                onChange: () => canvas.requestRenderAll(), // Render during animation
-                onComplete: () => {
-                    if (animationType === 'fadeOut') {
-                        obj.visible = false; // Hide after fading out
-                    }
-                    
-                    // Ensure final state is set explicitly
-                    obj.set(targetProps);
-                    if (animationType === 'fadeIn') {
-                        obj.set({ opacity: obj.appData.style?.opacity ?? 1 }); // Restore original opacity
-                    }
-
-                    canvas.requestRenderAll();
-                    if (onComplete) onComplete();
-                },
-                easing: fabric.util.ease.easeInOutQuad  // Add easing for smoother animation
-            });
-        } catch (error) {
-            console.error(`Animation error for ${animationType}:`, error);
-            if (onComplete) onComplete(); // Ensure callback still runs
-        }
+  
+    function _handleObjectModified(e) {
+      if (!isEditor || !e.target) return;
+      const obj = e.target;
+      const elementData = StateManager.getElementData(obj.id);
+  
+      if (elementData) {
+          // Store original dimensions for comparison
+          const originalWidth = elementData.width || 100;
+          const originalHeight = elementData.height || 50;
+          
+          // Calculate new dimensions while preserving aspect ratio if shift was held
+          const newWidth = obj.getScaledWidth();
+          const newHeight = obj.getScaledHeight();
+          
+          const updates = {
+              left: obj.left,
+              top: obj.top,
+              angle: obj.angle,
+              width: newWidth,
+              height: newHeight,
+              // Store current scale factors in the state
+              scaleX: obj.scaleX,
+              scaleY: obj.scaleY
+          };
+  
+          // Special handling for textboxes
+          if (obj.type === 'textbox') {
+              // For textboxes, we need to handle width differently to maintain text wrapping
+              updates.width = obj.width * obj.scaleX;
+              updates.scaleX = 1; // Reset only X scale for textboxes
+              updates.scaleY = obj.scaleY; // Preserve Y scale for text sizing
+          }
+  
+          StateManager.updateElementData(obj.id, updates);
+          
+          // Only reset scale if it's not a textbox
+          if (obj.type !== 'textbox') {
+              obj.set({
+                  width: newWidth,
+                  height: newHeight,
+                  scaleX: 1,
+                  scaleY: 1
+              });
+          }
+  
+          // Update UI
+          EditorUI.updatePropertiesPanel(obj);
+          canvas.requestRenderAll();
+      }
     }
+  
+    function _applyStyle(fabricObject, styleData) {
+        if (!fabricObject || !styleData) return;
+  
+         const styleUpdates = {};
+         if (styleData.color) styleUpdates.fill = styleData.color;
+         if (styleData.opacity !== undefined) styleUpdates.opacity = styleData.opacity;
+  
+         // Outline (Stroke)
+         if (styleData.outlineEnabled) {
+             styleUpdates.stroke = styleData.outlineColor || '#000000';
+             styleUpdates.strokeWidth = styleData.outlineWidth || 1;
+             styleUpdates.strokeDashArray = styleData.outlineStyle === 'dashed' ? [5, 5] : (styleData.outlineStyle === 'dotted' ? [1, 3] : null);
+         } else {
+             styleUpdates.stroke = null; // Remove stroke if disabled
+             styleUpdates.strokeWidth = 0;
+         }
+  
+         // Shadow
+         if (styleData.shadowEnabled) {
+             fabricObject.shadow = new fabric.Shadow({
+                 color: styleData.shadowColor || 'rgba(0,0,0,0.5)',
+                 blur: styleData.shadowBlur || 5,
+                 offsetX: styleData.shadowOffsetX || 3,
+                 offsetY: styleData.shadowOffsetY || 3,
+             });
+         } else {
+             fabricObject.shadow = null; // Remove shadow
+         }
+  
+          fabricObject.set(styleUpdates);
+          // Note: Animation is handled by InteractionHandler, not direct style application
+    }
+  
+     function _applyTextProperties(fabricTextObject, textData) {
+         if (!fabricTextObject || !textData) return;
+         const textUpdates = {};
+         if (textData.content !== undefined) textUpdates.text = textData.content;
+         if (textData.fontSize) textUpdates.fontSize = textData.fontSize;
+         if (textData.fontFamily) textUpdates.fontFamily = textData.fontFamily; // Add dropdown later
+         if (textData.fontWeight) textUpdates.fontWeight = textData.fontWeight; // bold
+         if (textData.fontStyle) textUpdates.fontStyle = textData.fontStyle; // italic
+         if (textData.underline) textUpdates.underline = textData.underline;
+         if (textData.textAlign) textUpdates.textAlign = textData.textAlign; // left, center, right
+         if (textData.lineHeight) textUpdates.lineHeight = textData.lineHeight;
+         if (textData.fill) textUpdates.fill = textData.fill; // Text color
+  
+         fabricTextObject.set(textUpdates);
+     }
+  
+    function _resetViewport() {
+        return canvas.setViewportTransform([1, 0, 0, 1, 0, 0]); // Default transform (scale 1, no translation)
+    }
+  
     // Helper for pulse animation
     function _runPulseAnimation(obj, originalScaleX, originalScaleY, duration, onComplete) {
         try {
@@ -702,7 +214,462 @@ const CanvasController = (() => {
             if (onComplete) onComplete();
         }
     }
-
-  };
-})();
-</script>
+  
+    // --- Public API ---
+    return {
+      initCanvas: _initCanvas,
+  
+      getCanvas: () => canvas, // Expose canvas instance carefully
+  
+      resizeCanvas() {
+          _resizeCanvas();
+      },
+  
+      loadSlide(slideData) {
+          if (!canvas || !slideData) {
+              console.error("Canvas or slide data not available for loading.");
+              return;
+          }
+          canvas.clear(); // Clear existing objects
+          _resetViewport(); // Reset zoom/pan
+  
+          // Set background (Image or Color)
+          if (slideData.imageFileId) {
+              currentSlideBg = { type: 'image', value: slideData.imageFileId };
+              Utils.showLoadingIndicator(true, 'Loading Background...');
+              ServerClient.loadImage(slideData.imageFileId)
+                  .then(dataUrl => {
+                      fabric.Image.fromURL(dataUrl, (img) => {
+                          canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
+                              // Scale image to fit canvas dimensions? Or use original size?
+                              // Let's try scaling to fit the initial canvas size.
+                              scaleX: canvas.width / img.width,
+                              scaleY: canvas.height / img.height,
+                              originX: 'left',
+                              originY: 'top'
+                              // TODO: Store background scaling/position?
+                          });
+                      });
+                  })
+                  .catch(err => {
+                      console.error("Failed to load background image:", err);
+                      Utils.showError(`Failed to load background: ${err.message}`);
+                      canvas.setBackgroundColor(slideData.backgroundColor || '#FFFFFF', canvas.renderAll.bind(canvas));
+                  })
+                  .finally(() => Utils.showLoadingIndicator(false));
+  
+          } else {
+              currentSlideBg = { type: 'color', value: slideData.backgroundColor || '#FFFFFF' };
+              canvas.setBackgroundColor(currentSlideBg.value, canvas.renderAll.bind(canvas));
+              canvas.backgroundImage = null; // Ensure no old image persists
+          }
+  
+  
+          // Add elements from slide data
+          if (slideData.elements && slideData.elements.length > 0) {
+              // Use requestIdleCallback or setTimeout to avoid blocking UI thread if many objects
+               setTimeout(() => {
+                  slideData.elements.forEach(elementData => this.addObject(elementData, false)); // Add without immediate render
+                  canvas.renderAll(); // Render all at once after adding
+                  console.log(`Loaded ${slideData.elements.length} elements for slide ${slideData.slideId}`);
+               }, 10); // Small delay
+          } else {
+               canvas.renderAll(); // Render background even if no elements
+          }
+  
+          // Set initial visibility based on sequence (if applicable)
+          InteractionHandler.applyInitialSequenceState();
+      },
+  
+      // Add a single object to the canvas based on element data
+      // Can be called during slide load or when user adds new element
+      addObject(elementData, render = true) {
+        if (!canvas || !elementData) return null;
+  
+        let fabricObject;
+        const commonOptions = {
+          left: elementData.left || 50, // Default position
+          top: elementData.top || 50,
+          angle: elementData.angle || 0,
+          originX: 'left', // Use consistent origins
+          originY: 'top',
+          // Fabric-specific props
+          borderColor: 'blue',
+          cornerColor: 'blue',
+          cornerSize: 8,
+          transparentCorners: false,
+          // Custom data storage
+          id: elementData.id || Utils.generateUUID(), // Ensure ID exists
+          appData: elementData // Store the full state manager data here
+        };
+  
+         // Apply initial styles (color, opacity, etc.) - BEFORE creating object if possible
+         commonOptions.fill = elementData.style?.color || '#FF4136'; // Default Red
+         commonOptions.opacity = elementData.style?.opacity ?? 1.0; // Use nullish coalescing
+  
+  
+        // --- Object Creation by Type ---
+        switch (elementData.type) {
+          case 'rect':
+            fabricObject = new fabric.Rect({
+              ...commonOptions,
+              width: elementData.width || 100,
+              height: elementData.height || 50,
+            });
+            break;
+  
+          case 'ellipse':
+            fabricObject = new fabric.Ellipse({
+              ...commonOptions,
+              rx: (elementData.width || 100) / 2, // Ellipse uses radius
+              ry: (elementData.height || 50) / 2,
+            });
+            break;
+  
+          case 'textbox':
+             // Textbox is special, style applies to text content mainly
+             commonOptions.fill = elementData.text?.fill || '#333333'; // Text color default
+             fabricObject = new fabric.Textbox(elementData.text?.content || 'New Text', {
+                  ...commonOptions,
+                  width: elementData.width || 150,
+                  fontSize: elementData.text?.fontSize || 16,
+                  // Other text props applied via _applyTextProperties later
+                  // Make background transparent by default unless specified
+                  backgroundColor: elementData.style?.backgroundColor || 'rgba(0,0,0,0)',
+                  padding: 5 // Add some padding
+             });
+             _applyTextProperties(fabricObject, elementData.text);
+             break;
+  
+          // --- TODO: Text on Shape (Group) ---
+          // case 'shapeWithText': // Example: a rect with text inside
+          //   const shape = new fabric.Rect({ /* shape options */ });
+          //   const text = new fabric.Textbox('Text', { /* text options relative to shape */ });
+          //   fabricObject = new fabric.Group([shape, text], { ...commonOptions });
+          //   // Need logic to handle group resizing, text wrapping, and saving/loading group structure
+          //   break;
+  
+          default:
+            console.warn("Unsupported element type:", elementData.type);
+            return null;
+        }
+  
+        // Apply common styles (outline, shadow) after object creation
+        _applyStyle(fabricObject, elementData.style);
+  
+        // Apply initial visibility (often handled by sequence handler)
+         if (elementData.initiallyHidden) {
+             fabricObject.visible = false;
+         }
+  
+         // Set selectability/eventing based on mode
+         fabricObject.selectable = isEditor;
+         fabricObject.evented = true; // Always allow events (clicks)
+  
+        // Add to canvas
+        canvas.add(fabricObject);
+  
+         // Attach interaction listeners (Viewer and Editor might need different ones?)
+         InteractionHandler.attachListenersToObject(fabricObject);
+  
+        if (render) {
+          canvas.requestRenderAll(); // Request render instead of immediate
+        }
+  
+        return fabricObject; // Return the created fabric object
+      },
+  
+      updateObjectFromData(elementId) {
+          const fabricObj = this.getObjectById(elementId);
+          const elementData = StateManager.getElementData(elementId);
+          
+          if (!fabricObj || !elementData) {
+              console.error(`Cannot update object: fabricObj=${!!fabricObj}, elementData=${!!elementData}`);
+              return false;
+          }
+          
+          try {
+              // Update basic properties
+              const updates = {
+                  left: elementData.left || 0,
+                  top: elementData.top || 0,
+                  angle: elementData.angle || 0,
+              };
+              
+              // Update dimensions carefully based on type
+              if (fabricObj.type === 'rect' || fabricObj.type === 'textbox') {
+                  updates.width = elementData.width || 100;
+                  updates.height = elementData.height || 50;
+              } else if (fabricObj.type === 'ellipse') {
+                  updates.rx = (elementData.width || 100) / 2;
+                  updates.ry = (elementData.height || 50) / 2;
+              }
+              
+              // Reset scale factors
+              updates.scaleX = 1;
+              updates.scaleY = 1;
+              
+              // Apply position and dimension updates
+              fabricObj.set(updates);
+              
+              // Apply styles
+              _applyStyle(fabricObj, elementData.style);
+              
+              // Apply text properties for textbox
+              if (fabricObj.type === 'textbox' && elementData.text) {
+                  _applyTextProperties(fabricObj, elementData.text);
+              }
+              
+              // Update visibility
+              fabricObj.visible = !elementData.initiallyHidden;
+              
+              // Update the stored appData reference
+              fabricObj.appData = elementData;
+              
+              canvas.requestRenderAll();
+              return true;
+          } catch (error) {
+              console.error(`Error updating object ${elementId}:`, error);
+              return false;
+          }
+      },
+  
+      removeObjectById(elementId) {
+        const obj = this.getObjectById(elementId);
+        if (obj) {
+          canvas.remove(obj);
+          canvas.requestRenderAll();
+          return true;
+        }
+        return false;
+      },
+  
+      deleteSelectedObject() {
+          if (!isEditor) return;
+          const activeObject = canvas.getActiveObject();
+          if (activeObject) {
+              // If it's a multi-selection (ActiveSelection)
+              if (activeObject.type === 'activeSelection') {
+                  activeObject.forEachObject(obj => {
+                      StateManager.removeElementData(obj.id); // Remove from state
+                      canvas.remove(obj); // Remove from canvas
+                  });
+              } else {
+                  // Single object selected
+                   StateManager.removeElementData(activeObject.id);
+                   canvas.remove(activeObject);
+              }
+              canvas.discardActiveObject(); // Deselect
+              canvas.requestRenderAll();
+               EditorUI.updateSequenceList(); // Update sequence list as element is gone
+          }
+      },
+  
+      getObjectById(id) {
+        return canvas.getObjects().find(o => o.id === id);
+      },
+  
+      setActiveObject(elementId) {
+          if (!isEditor) return;
+          const obj = this.getObjectById(elementId);
+          if (obj) {
+              canvas.setActiveObject(obj);
+              canvas.renderAll();
+          } else {
+               canvas.discardActiveObject();
+               canvas.renderAll();
+          }
+          // Update properties panel
+          _handleSelectionChange();
+      },
+  
+      getActiveObjectId() {
+          if (!isEditor) return null;
+          const activeObj = canvas.getActiveObject();
+          // Handle single vs multi-selection if needed differently
+          return activeObj?.id;
+      },
+  
+      // --- Viewport Manipulation (Pan/Zoom) ---
+      getViewportTransform() {
+          return canvas.viewportTransform; // [scaleX, skewY, skewX, scaleY, translateX, translateY]
+      },
+  
+      setViewportTransform(transformArray, render = true) {
+          canvas.setViewportTransform(transformArray);
+          if (render) canvas.requestRenderAll();
+      },
+  
+      zoomToPoint(point, zoomFactor, render = true) {
+          // point is { x: ..., y: ... } in canvas coords
+          canvas.zoomToPoint(point, zoomFactor);
+          if (render) canvas.requestRenderAll();
+      },
+  
+      pan(deltaX, deltaY, render = true) {
+          canvas.relativePan(new fabric.Point(deltaX, deltaY));
+           if (render) canvas.requestRenderAll();
+      },
+  
+      animateViewport(targetTransform, duration = 500, onComplete = null) {
+          const startTransform = this.getViewportTransform();
+          fabric.util.animate({
+              startValue: startTransform,
+              endValue: targetTransform,
+              duration: duration,
+              onChange: (value) => {
+                  this.setViewportTransform(value, true); // Render each step
+              },
+              onComplete: () => {
+                   this.setViewportTransform(targetTransform, true); // Ensure final state
+                   if (onComplete) onComplete();
+              },
+              // easing: fabric.util.ease.easeInOutQuad // Add easing
+          });
+      },
+  
+      // --- Background Image Handling ---
+      async setBackgroundImage(imageFileId) {
+          if (!canvas) return;
+          Utils.showLoadingIndicator(true, 'Setting Background...');
+          
+          try {
+              const dataUrl = await ServerClient.loadImage(imageFileId);
+              
+              // Convert callback to Promise for better async handling
+              await new Promise((resolve, reject) => {
+                  fabric.Image.fromURL(dataUrl, (img) => {
+                      if (!img) {
+                          reject(new Error("Failed to create image from URL"));
+                          return;
+                      }
+                      
+                      // Calculate proper scaling
+                      const slide = StateManager.getCurrentSlide();
+                      const targetWidth = slide?.imageWidth || canvas.width;
+                      const targetHeight = slide?.imageHeight || canvas.height;
+                      
+                      // Set background with proper scaling
+                      canvas.setBackgroundImage(img, () => {
+                          // Update state only after background is set
+                          StateManager.updateSlideProperties(StateManager.getCurrentSlideId(), {
+                              imageFileId: imageFileId,
+                              imageUrl: `drive://${imageFileId}`,
+                              imageWidth: img.width,
+                              imageHeight: img.height,
+                              backgroundColor: null
+                          });
+                          
+                          currentSlideBg = { type: 'image', value: imageFileId };
+                          
+                          // Render after all updates
+                          canvas.renderAll();
+                          resolve();
+                      }, {
+                          scaleX: targetWidth / img.width,
+                          scaleY: targetHeight / img.height,
+                          originX: 'left',
+                          originY: 'top'
+                      });
+                  });
+              });
+              
+              // Update UI only after everything is complete
+              if (typeof EditorUI !== 'undefined' && EditorUI.updateSlideBackgroundDisplay) {
+                  EditorUI.updateSlideBackgroundDisplay(imageFileId, "Image Loaded");
+              }
+          } catch (error) {
+              console.error("Error setting background image:", error);
+              Utils.showError(`Failed to set background: ${error.message}`);
+          } finally {
+              Utils.showLoadingIndicator(false);
+          }
+      },
+  
+      clearBackgroundImage() {
+           if (!canvas) return;
+           canvas.setBackgroundImage(null, canvas.renderAll.bind(canvas));
+           canvas.setBackgroundColor('#FFFFFF', canvas.renderAll.bind(canvas)); // Reset to default color
+           StateManager.updateSlideProperties(StateManager.getCurrentSlideId(), {
+               imageFileId: null,
+               imageUrl: null,
+               backgroundColor: '#FFFFFF'
+           });
+           currentSlideBg = { type: 'color', value: '#FFFFFF' };
+           EditorUI.updateSlideBackgroundDisplay(null);
+      },
+  
+      // --- Animation ---
+      animateObject(elementId, animationType, duration = 500, onComplete = null) {
+          const obj = this.getObjectById(elementId);
+          if (!obj) {
+              console.error(`Cannot animate: Object with ID ${elementId} not found`);
+              if (onComplete) onComplete();
+              return;
+          }
+  
+          let targetProps = {};
+          let startProps = {}; // Store initial state for potential reversal
+  
+          try {
+              switch (animationType) {
+                  case 'fadeIn':
+                      startProps = { opacity: 0 };
+                      // Fade to element's defined opacity or default to 1
+                      targetProps = { opacity: obj.appData?.style?.opacity ?? 1 };
+                      obj.set('opacity', 0); // Start transparent
+                      obj.visible = true; // Make sure it's visible for animation
+                      break;
+                  case 'fadeOut':
+                      startProps = { opacity: obj.opacity };
+                      targetProps = { opacity: 0 };
+                      obj.visible = true;
+                      break;
+                  case 'pulse': // Multiple steps animation with callback chain
+                      const originalScaleX = obj.scaleX || 1;
+                      const originalScaleY = obj.scaleY || 1;
+                      startProps = { scaleX: originalScaleX, scaleY: originalScaleY};
+                      targetProps = { scaleX: originalScaleX * 1.2, scaleY: originalScaleY * 1.2 };
+                      obj.visible = true;
+                      
+                      // Chain animations with callbacks
+                      return _runPulseAnimation(obj, originalScaleX, originalScaleY, duration, onComplete);
+                      
+                  // Add more cases as needed
+                  default:
+                      console.warn(`Unsupported animation type: ${animationType}`);
+                      if (onComplete) onComplete();
+                      return;
+              }
+  
+              // Apply start state if needed
+              obj.set(startProps);
+              canvas.requestRenderAll();
+  
+              // Use Fabric animation
+              obj.animate(targetProps, {
+                  duration: duration,
+                  onChange: () => canvas.requestRenderAll(), // Render during animation
+                  onComplete: () => {
+                      if (animationType === 'fadeOut') {
+                          obj.visible = false; // Hide after fading out
+                      }
+                      
+                      // Ensure final state is set explicitly
+                      obj.set(targetProps);
+                      if (animationType === 'fadeIn') {
+                          obj.set({ opacity: obj.appData.style?.opacity ?? 1 }); // Restore original opacity
+                      }
+  
+                      canvas.requestRenderAll();
+                      if (onComplete) onComplete();
+                  },
+                  easing: fabric.util.ease.easeInOutQuad  // Add easing for smoother animation
+              });
+          } catch (error) {
+              console.error(`Animation error for ${animationType}:`, error);
+              if (onComplete) onComplete(); // Ensure callback still runs
+          }
+      }
+    };
+  })();
