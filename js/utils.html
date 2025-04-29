@@ -1,133 +1,220 @@
 <script>
 const Utils = (() => {
-  // Keep references, but find elements after DOM is loaded
-  let loadingIndicator = null;
-  let errorIndicator = null;
-  let errorMessageElement = null;
-  let domInitialized = false;
+    let domRefs = {};
+    let errorTimeout;
+    let loadingCount = 0;
 
-  function initUtilsDOMReferences() {
-    loadingIndicator = document.getElementById('loading-indicator');
-    errorIndicator = document.getElementById('error-indicator');
-    errorMessageElement = document.getElementById('error-message');
-    
-    if (loadingIndicator && errorIndicator && errorMessageElement) {
-      domInitialized = true;
-      Utils.listen('#error-indicator .close-button', 'click', hideError);
-      console.log("Utils DOM references initialized successfully");
-    } else {
-      console.warn("Utils could not find all indicator elements, will retry when needed");
+    function init() {
+        ensureDOMReferences();
+        setupGlobalErrorHandling();
     }
-    return domInitialized;
-  }
 
-  // Ensure DOM references exist before using them
-  function ensureDOMReferences() {
-    if (!domInitialized) {
-      return initUtilsDOMReferences();
+    function ensureDOMReferences() {
+        const required = {
+            loadingIndicator: 'loading-indicator',
+            loadingText: 'loading-text',
+            errorMessage: 'error-message',
+            errorText: 'error-text'
+        };
+
+        const missing = [];
+        domRefs = {};
+
+        for (const [key, id] of Object.entries(required)) {
+            const element = document.getElementById(id);
+            if (!element) {
+                missing.push(id);
+            } else {
+                domRefs[key] = element;
+            }
+        }
+
+        if (missing.length > 0) {
+            console.error(`Missing required UI elements: ${missing.join(', ')}`);
+            // Create fallback elements if they don't exist
+            createFallbackElements(missing);
+        }
     }
-    return domInitialized;
-  }
 
-  function showLoadingIndicator(show, message = 'Loading...') {
-    if (!ensureDOMReferences() && show) {
-      console.warn("Loading indicator not initialized, using fallback");
-      return;
+    function createFallbackElements(missingIds) {
+        // Create a container for fallback elements if needed
+        let fallbackContainer = document.getElementById('utils-fallback-container');
+        if (!fallbackContainer) {
+            fallbackContainer = document.createElement('div');
+            fallbackContainer.id = 'utils-fallback-container';
+            fallbackContainer.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 9999;';
+            document.body.appendChild(fallbackContainer);
+        }
+
+        missingIds.forEach(id => {
+            const element = document.createElement('div');
+            element.id = id;
+            element.style.display = 'none';
+            
+            switch (id) {
+                case 'loading-indicator':
+                    element.innerHTML = `
+                        <div style="background: rgba(0,0,0,0.8); color: white; padding: 10px; border-radius: 5px;">
+                            <span id="loading-text">Loading...</span>
+                        </div>`;
+                    break;
+                case 'error-message':
+                    element.innerHTML = `
+                        <div style="background: #EA4335; color: white; padding: 10px; border-radius: 5px; margin-top: 5px;">
+                            <span id="error-text"></span>
+                        </div>`;
+                    break;
+            }
+            
+            fallbackContainer.appendChild(element);
+            domRefs[id === 'loading-indicator' ? 'loadingIndicator' : 'errorMessage'] = element;
+            if (id === 'loading-indicator') {
+                domRefs.loadingText = element.querySelector('#loading-text');
+            } else if (id === 'error-message') {
+                domRefs.errorText = element.querySelector('#error-text');
+            }
+        });
     }
-    
-    if (loadingIndicator) {
-      const messageEl = loadingIndicator.querySelector('p');
-      if (messageEl) messageEl.textContent = message;
-      loadingIndicator.style.display = show ? 'flex' : 'none';
-      if (show) {
-        loadingIndicator.classList.add('active');
-      } else {
-        loadingIndicator.classList.remove('active');
-      }
+
+    function setupGlobalErrorHandling() {
+        window.onerror = function(msg, url, line, col, error) {
+            console.error('Global error:', {msg, url, line, col, error});
+            showError(`An error occurred: ${msg}`);
+            return false; // Let default handler run
+        };
+
+        window.addEventListener('unhandledrejection', function(event) {
+            console.error('Unhandled promise rejection:', event.reason);
+            showError(`Promise error: ${event.reason?.message || 'Unknown error'}`);
+        });
     }
-  }
 
-  function showError(message = 'An unexpected error occurred.') {
-    console.error("Error Shown:", message); // Log detailed error
-    if (!ensureDOMReferences()) {
-      console.warn("Error indicator elements not initialized, using alert fallback");
-      alert(`Error: ${message}`);
-      return;
+    function showError(message, duration = 5000) {
+        if (!domRefs.errorMessage || !domRefs.errorText) {
+            console.error('Error display elements not available');
+            alert(message); // Fallback to alert if elements don't exist
+            return;
+        }
+
+        clearTimeout(errorTimeout);
+        domRefs.errorText.textContent = message;
+        domRefs.errorMessage.style.display = 'block';
+        
+        // Auto-hide after duration
+        errorTimeout = setTimeout(() => {
+            domRefs.errorMessage.style.display = 'none';
+        }, duration);
     }
-    
-    errorMessageElement.textContent = message;
-    errorIndicator.style.display = 'flex';
-    errorIndicator.classList.add('active');
-  }
 
-  function hideError() {
-    // Check if refs are initialized
-    if (!ensureDOMReferences()) {
-      console.warn("Error indicator not initialized, cannot hide");
-      return;
+    function showLoadingIndicator(show = true, message = 'Loading...') {
+        if (!domRefs.loadingIndicator || !domRefs.loadingText) {
+            console.warn('Loading indicator elements not available');
+            return;
+        }
+
+        if (show) {
+            loadingCount++;
+            domRefs.loadingText.textContent = message;
+            domRefs.loadingIndicator.style.display = 'block';
+        } else {
+            loadingCount = Math.max(0, loadingCount - 1);
+            if (loadingCount === 0) {
+                domRefs.loadingIndicator.style.display = 'none';
+            }
+        }
     }
-    
-    errorIndicator.style.display = 'none';
-    errorIndicator.classList.remove('active');
-  }
 
-  // Basic UUID generator
-  function generateUUID() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-      var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
-
-  // Fisher-Yates (Knuth) Shuffle
-  function shuffleArray(array) {
-    let currentIndex = array.length, randomIndex;
-    while (currentIndex != 0) {
-      randomIndex = Math.floor(Math.random() * currentIndex);
-      currentIndex--;
-      [array[currentIndex], array[randomIndex]] = [
-        array[randomIndex], array[currentIndex]];
+    // Safe event listener attachment with error handling
+    function listen(target, event, handler) {
+        try {
+            const element = typeof target === 'string' ? document.querySelector(target) : target;
+            if (!element) {
+                console.warn(`Target element not found: ${target}`);
+                return false;
+            }
+            element.addEventListener(event, handler);
+            return true;
+        } catch (error) {
+            console.error(`Error attaching event listener:`, error);
+            return false;
+        }
     }
-    return array;
-  }
 
-  // Simple debounce function
-  function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-      const later = () => {
-        clearTimeout(timeout);
-        func(...args);
-      };
-      clearTimeout(timeout);
-      timeout = setTimeout(later, wait);
+    // Utility function to generate UUIDs for elements
+    function generateUUID() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    // Debounce utility for handling rapid events
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    // Throttle utility for limiting function calls
+    function throttle(func, limit) {
+        let inThrottle;
+        return function executedFunction(...args) {
+            if (!inThrottle) {
+                func(...args);
+                inThrottle = true;
+                setTimeout(() => inThrottle = false, limit);
+            }
+        };
+    }
+
+    // Data validation helpers
+    function validateNumber(value, min = null, max = null) {
+        const num = parseFloat(value);
+        if (isNaN(num)) return false;
+        if (min !== null && num < min) return false;
+        if (max !== null && num > max) return false;
+        return true;
+    }
+
+    function validateColor(color) {
+        if (!color) return false;
+        // Test for hex colors
+        if (/^#([A-Fa-f0-9]{3}){1,2}$/.test(color)) return true;
+        // Test for rgb/rgba
+        if (/^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*(?:,\s*[\d.]+\s*)?\)$/.test(color)) return true;
+        return false;
+    }
+
+    // File helpers
+    function getFileExtension(filename) {
+        return filename.slice((filename.lastIndexOf('.') - 1 >>> 0) + 2);
+    }
+
+    function isImageFile(file) {
+        const ext = getFileExtension(file.name).toLowerCase();
+        return ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext);
+    }
+
+    // Return public API
+    return {
+        init,
+        showError,
+        showLoadingIndicator,
+        listen,
+        generateUUID,
+        debounce,
+        throttle,
+        validateNumber,
+        validateColor,
+        isImageFile,
+        getFileExtension
     };
-  }
-
-  // Add event listener safely
-  function listen(selectorOrElement, eventName, callback) {
-    const element = typeof selectorOrElement === 'string'
-      ? document.querySelector(selectorOrElement)
-      : selectorOrElement;
-    if (element) {
-      element.addEventListener(eventName, callback);
-    } else {
-      console.warn(`Element not found for listener: ${selectorOrElement}`);
-    }
-  }
-
-  // Create the Utils object to return
-  const Utils = {
-    initUtilsDOMReferences,
-    showLoadingIndicator,
-    showError,
-    hideError,
-    generateUUID,
-    shuffleArray,
-    debounce,
-    listen
-  };
-  
-  return Utils;
 })();
 </script>
