@@ -242,27 +242,70 @@ const InteractionHandler = (() => {
     }
 
     function updateNavUI() {
-        const historyLength = StateManager.getCurrentSequenceIndex();
-        const totalSteps = StateManager.getCurrentSequence().length;
+        const sequence = StateManager.getCurrentSequence();
+        const totalSteps = sequence.length;
+        const currentIndex = StateManager.getCurrentSequenceIndex();
         
-        // Update step counter (show current step number instead of completed steps)
-        const currentStep = historyLength + 1;
+        // Show step as 1-based for better UX, but handle special cases
+        const currentStepDisplay = currentIndex < 0 ? 0 : currentIndex + 1;
+        
         const stepIndicator = document.getElementById('step-indicator');
         if (stepIndicator) {
-            stepIndicator.textContent = `Step ${currentStep} of ${totalSteps}`;
+            if (totalSteps === 0) {
+                stepIndicator.textContent = 'No steps available';
+            } else if (currentIndex >= totalSteps) {
+                stepIndicator.textContent = `Complete! (${totalSteps} steps)`;
+            } else {
+                stepIndicator.textContent = `Step ${currentStepDisplay} of ${totalSteps}`;
+            }
         }
 
-        // Update navigation buttons
+        // Update navigation buttons state
         const prevButton = document.getElementById('prev-step');
         const nextButton = document.getElementById('next-step');
         
         if (prevButton) {
-            prevButton.disabled = currentStep <= 1;
+            prevButton.disabled = currentStepDisplay <= 1;
         }
         
         if (nextButton) {
-            nextButton.disabled = currentStep >= totalSteps;
+            nextButton.disabled = currentIndex >= totalSteps - 1;
+            // Update next button text based on state
+            nextButton.textContent = currentIndex >= totalSteps - 1 ? 'Complete' : 'Next';
         }
+        
+        // Highlight current step in sequence if available
+        highlightCurrentStep(sequence[currentIndex]);
+    }
+
+    function highlightCurrentStep(currentElementId) {
+        // Remove highlight from all elements
+        CanvasController.getCanvas().getObjects().forEach(obj => {
+            if (obj.stroke === '#FBBC05') { // Remove previous highlight
+                obj.set({
+                    stroke: obj.originalStroke || null,
+                    strokeWidth: obj.originalStrokeWidth || 0
+                });
+            }
+        });
+        
+        // Add highlight to current element
+        if (currentElementId) {
+            const currentObj = CanvasController.getObjectById(currentElementId);
+            if (currentObj) {
+                // Store original stroke properties
+                currentObj.originalStroke = currentObj.stroke;
+                currentObj.originalStrokeWidth = currentObj.strokeWidth;
+                
+                // Apply highlight
+                currentObj.set({
+                    stroke: '#FBBC05',
+                    strokeWidth: 2
+                });
+            }
+        }
+        
+        CanvasController.getCanvas().requestRenderAll();
     }
 
     // --- Helper Functions ---

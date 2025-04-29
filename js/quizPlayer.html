@@ -1,681 +1,229 @@
 <script>
 const QuizPlayer = (() => {
-    const playerModal = document.getElementById('quiz-player-modal');
-    const playerTitle = document.getElementById('quiz-player-title');
-    const playerBody = document.getElementById('quiz-player-body');
-    const promptElement = document.getElementById('quiz-question-prompt');
-    const answerArea = document.getElementById('quiz-question-answer-area');
-    const feedbackArea = document.getElementById('quiz-question-feedback-area');
-    const nextButton = document.getElementById('quiz-player-next-button');
+    let currentQuiz = null;
+    let completionCallback = null;
+    let sortableInstances = new Map();
 
-    const resultsModal = document.getElementById('quiz-results-modal');
-    const resultsTitle = document.getElementById('quiz-results-title');
-    const resultsBody = document.getElementById('quiz-results-body');
-    const resultsScore = document.getElementById('quiz-results-score');
-    const resultsEmailSection = document.getElementById('quiz-results-email-section');
-    const resultsEmailInput = document.getElementById('quiz-results-email-input');
-    const resultsSendButton = document.getElementById('quiz-results-send-button');
-     const resultsEmailStatus = document.getElementById('quiz-results-email-status');
-     const resultsCreatorMessage = document.getElementById('quiz-results-creator-message');
-     const resultsEmailStatusCreator = document.getElementById('quiz-results-email-status-creator');
-    const resultsCloseButton = document.getElementById('quiz-results-close-button');
-
-
-    let currentQuiz = null; // Full quiz data { enabled, questions, feedbackTiming, ... }
-    let currentElementData = null; // Data of the element that triggered the quiz
-    let currentQuestionIndex = 0;
-    let userAnswers = {}; // Store answers keyed by questionId: { questionId: { answer: ..., isCorrect: bool, ... }, ...}
-    let quizStartTime = null;
-    let onQuizCompleteCallback = null; // Callback from InteractionHandler
-
-    // Store SortableJS instances to destroy them later
-    let sortableInstances = [];
-
-    function _init() {
-        Utils.listen(nextButton, 'click', handleNextButtonClick);
-        Utils.listen(resultsSendButton, 'click', handleSendEmailToUser);
-        Utils.listen(resultsCloseButton, 'click', closeResultsModal);
-        // Close results modal also attached inline
+    function init() {
+        // Listen for modal close events to ensure cleanup
+        Utils.listen('#quiz-modal-close', 'click', closeQuiz);
+        window.addEventListener('beforeunload', cleanup);
     }
 
-    // fabricObject is the element that triggered the quiz
-    // onComplete is called when the quiz flow (including results modal) is finished
+    function cleanup() {
+        clearSortableInstances();
+        currentQuiz = null;
+        completionCallback = null;
+    }
+
+    function clearSortableInstances() {
+        // Properly destroy all Sortable instances
+        sortableInstances.forEach((instance, containerId) => {
+            try {
+                instance.destroy();
+            } catch (error) {
+                console.error(`Error destroying Sortable instance for ${containerId}:`, error);
+            }
+        });
+        sortableInstances.clear();
+    }
+
     function openQuiz(fabricObject, onComplete) {
-        if (!playerModal || !fabricObject || !fabricObject.appData) {
-            console.error("Quiz Player cannot open: Missing modal or element data.");
-            return;
-        }
-        currentElementData = fabricObject.appData;
-        currentQuiz = currentElementData.interactions?.features?.quiz;
-
-        if (!currentQuiz || !currentQuiz.enabled || !currentQuiz.questions || currentQuiz.questions.length === 0) {
-            console.warn("Attempted to open quiz, but it's disabled or has no questions.", currentElementData.id);
-             // Optionally show a message? Or just do nothing.
-             // If called within sequence, need to ensure sequence advances even if quiz doesn't show.
-             if (onComplete) onComplete(); // Immediately call completion callback if no quiz shown
+        if (!fabricObject?.appData?.interactions?.features?.quiz) {
+            console.error('No quiz data found for object');
             return;
         }
 
-        console.log("Opening Quiz Player for:", currentElementData.nickname || currentElementData.id);
+        cleanup(); // Ensure clean state before opening
+        currentQuiz = fabricObject.appData.interactions.features.quiz;
+        completionCallback = onComplete;
 
-        // Reset state
-        currentQuestionIndex = 0;
-        userAnswers = {};
-        quizStartTime = Date.now();
-        onQuizCompleteCallback = onComplete;
-        clearSortableInstances(); // Clear any old sortable instances
-
-        playerTitle.textContent = `Quiz: ${currentElementData.nickname || 'Quiz'}`;
-        renderQuestion(currentQuestionIndex);
-        playerModal.classList.add('active');
+        renderQuiz();
+        document.getElementById('quiz-modal').classList.add('active');
     }
 
     function closeQuiz() {
-         // This might be called if we add a cancel button, but typically quiz runs to completion.
-         playerModal.classList.remove('active');
-         clearSortableInstances();
-         if (onQuizCompleteCallback) {
-             console.log("Quiz closed/cancelled, triggering completion callback.");
-             onQuizCompleteCallback(); // Ensure sequence advances even if cancelled
-         }
+        document.getElementById('quiz-modal').classList.remove('active');
+        cleanup();
     }
 
+    function renderQuiz() {
+        const container = document.getElementById('quiz-content');
+        if (!container || !currentQuiz) return;
 
-    function renderQuestion(index) {
-        const question = currentQuiz.questions[index];
-        if (!question) {
-            console.error("Invalid question index:", index);
-            return; // Should not happen
-        }
-
-        promptElement.innerHTML = `Q${index + 1}: ${question.prompt}`; // Use innerHTML to render potential basic formatting
-        feedbackArea.innerHTML = ''; // Clear previous feedback
-        feedbackArea.className = 'quiz-question-feedback-area'; // Reset feedback style
-        answerArea.innerHTML = ''; // Clear previous answer area
-
-        clearSortableInstances(); // Destroy previous drag/drop listeners before adding new ones
-
-        // Render answer area based on type
-        switch (question.questionType) {
-            case 'multipleChoice':
-                renderMultipleChoice(question);
-                break;
-            case 'fillBlank':
-                renderFillBlank(question);
-                break;
-            case 'matching':
-                renderMatching(question);
-                break;
-            case 'ordering':
-                renderOrdering(question);
-                break;
-            default:
-                answerArea.innerHTML = `<p>Error: Unsupported question type "${question.questionType}".</p>`;
-        }
-
-        // Update button text
-        if (index === currentQuiz.questions.length - 1) {
-            nextButton.textContent = 'Finish Quiz';
-        } else {
-            nextButton.textContent = 'Next Question';
-        }
-         nextButton.disabled = false; // Enable button when new question renders
-    }
-
-    // --- Rendering Specific Question Types ---
-
-    function renderMultipleChoice(question) {
-        const options = Utils.shuffleArray([...question.options]); // Shuffle a copy
-        let html = `<div class="quiz-mc-options">`;
-        options.forEach(opt => {
-            // Use radio for single answer, checkbox if multiple correct allowed (assume single for now)
-            html += `
-                <label for="mc-opt-${opt.optionId}">
-                    <input type="radio" name="mc-answer" id="mc-opt-${opt.optionId}" value="${opt.optionId}">
-                    <span>${opt.text}</span>
-                </label>
-            `;
-        });
-        html += `</div>`;
-        answerArea.innerHTML = html;
-    }
-
-     function renderFillBlank(question) {
-        answerArea.innerHTML = `
-            <div class="quiz-fillblank-input">
-                <input type="text" id="fillblank-answer" placeholder="Type your answer here">
-            </div>
-        `;
-     }
-
-    function renderMatching(question) {
-        // Shuffle prompts and answers separately
-        const prompts = Utils.shuffleArray([...question.pairs.map(p => ({ id: p.pairId, text: p.prompt }))]);
-        const answers = Utils.shuffleArray([...question.pairs.map(p => ({ id: p.pairId, text: p.answer }))]);
-
-        // Create HTML structure
-        let html = `
-            <p class="help-text">Drag the answers from the right to match the prompts on the left.</p>
-            <div class="quiz-matching-area">
-                <div class="quiz-matching-column" id="match-prompts-col">
-                    <h4>Prompts</h4>
-                    ${prompts.map(p => `
-                        <div class="quiz-match-prompt" data-prompt-id="${p.id}">
-                            <span>${p.text}</span>
-                            <div class="quiz-match-drop-zone" data-pair-id="${p.id}">
-                                <!-- Drop target -->
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-                <div class="quiz-matching-column" id="match-answers-col">
-                    <h4>Answers (Drag these)</h4>
-                    ${answers.map(a => `
-                        <div class="quiz-match-item" data-answer-id="${a.id}">
-                            ${a.text}
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `;
-        answerArea.innerHTML = html;
-
-        // Clear previous instances
-        clearSortableInstances();
-        
-        // Initialize SortableJS with improved configuration
-        const answersCol = document.getElementById('match-answers-col');
-        const dropZones = document.querySelectorAll('.quiz-match-drop-zone');
-        
-        if (!answersCol || dropZones.length === 0) {
-            console.error("Required DOM elements for matching not found");
-            return;
-        }
-
-        // Create a map to track item placement
-        const placedItems = new Map();
-
-        // Draggable answers pool
-        sortableInstances.push(new Sortable(answersCol, {
-            group: {
-                name: 'matching',
-                pull: 'clone', // Clone when dragging out
-                put: true // Allow return to pool
-            },
-            sort: false, // Don't sort in source list
-            animation: 150,
-            ghostClass: 'sortable-ghost',
-            dragClass: 'sortable-drag'
-        }));
-
-        // Initialize drop zones
-        dropZones.forEach(zone => {
-            const pairId = zone.dataset.pairId;
+        container.innerHTML = '';
+        currentQuiz.questions.forEach((question, index) => {
+            const questionEl = document.createElement('div');
+            questionEl.className = 'quiz-question';
             
-            sortableInstances.push(new Sortable(zone, {
-                group: {
-                    name: 'matching',
-                    put: function(to, from, dragEl) {
-                        // Only allow if zone is empty or replacing existing item
-                        return to.el.children.length === 0;
-                    }
-                },
-                animation: 150,
-                ghostClass: 'sortable-ghost',
-                dragClass: 'sortable-drag',
-                onAdd: function(evt) {
-                    const itemId = evt.item.dataset.answerId;
-                    
-                    // Track this item's placement
-                    placedItems.set(pairId, itemId);
-                    
-                    // Add visual feedback for matching
-                    evt.item.classList.add('placed-item');
-                    zone.classList.add('has-item');
-                    
-                    // Force zone to have only one child
-                    if (zone.children.length > 1) {
-                        for (let i = 0; i < zone.children.length; i++) {
-                            if (zone.children[i] !== evt.item) {
-                                // Put the old item back to the answer pool
-                                answersCol.appendChild(zone.children[i]);
-                            }
-                        }
-                    }
-                },
-                onRemove: function(evt) {
-                    // Clear tracking and visual feedback
-                    placedItems.delete(pairId);
-                    zone.classList.remove('has-item');
-                }
-            }));
+            switch (question.type) {
+                case 'matching':
+                    renderMatching(questionEl, question, index);
+                    break;
+                case 'ordering':
+                    renderOrdering(questionEl, question, index);
+                    break;
+                // Add other question types here
+            }
+            
+            container.appendChild(questionEl);
         });
     }
 
-    function renderOrdering(question) {
-        const items = Utils.shuffleArray([...question.items]); // Shuffle items for display
+    function renderMatching(container, question, index) {
+        // Create matching container with two columns
+        const matchingContainer = document.createElement('div');
+        matchingContainer.className = 'matching-container';
+        matchingContainer.id = `matching-${index}`;
 
-        let html = `
-             <p class="help-text">Drag the items into the correct order below.</p>
-             <div class="quiz-ordering-area" id="order-drop-area">
-                 ${items.map((item, index) => `
-                    <div class="quiz-order-item" data-original-index="${index}"> <!-- Store original index if needed? Or just text? -->
-                        <span class="order-handle">☰</span> <!-- Drag handle -->
-                        <span>${item}</span>
-                    </div>
-                 `).join('')}
-             </div>
-        `;
-         answerArea.innerHTML = html;
+        // Left column (fixed)
+        const leftCol = document.createElement('div');
+        leftCol.className = 'matching-left';
+        question.pairs.forEach((pair, pairIndex) => {
+            const item = document.createElement('div');
+            item.className = 'matching-item fixed';
+            item.textContent = pair.left;
+            leftCol.appendChild(item);
+        });
 
-         // Initialize SortableJS
-         const dropArea = document.getElementById('order-drop-area');
-         sortableInstances.push(new Sortable(dropArea, {
-             animation: 150,
-             ghostClass: 'sortable-ghost',
-             dragClass: 'sortable-drag',
-             handle: '.order-handle', // Specify drag handle
-             // onEnd event not needed here unless we want to save state continuously
-         }));
+        // Right column (sortable)
+        const rightCol = document.createElement('div');
+        rightCol.className = 'matching-right';
+        rightCol.id = `matching-right-${index}`;
+        
+        // Shuffle right-side items
+        const shuffledRight = [...question.pairs]
+            .sort(() => Math.random() - 0.5)
+            .map(pair => pair.right);
+        
+        shuffledRight.forEach(text => {
+            const item = document.createElement('div');
+            item.className = 'matching-item draggable';
+            item.textContent = text;
+            rightCol.appendChild(item);
+        });
+
+        matchingContainer.appendChild(leftCol);
+        matchingContainer.appendChild(rightCol);
+        container.appendChild(matchingContainer);
+
+        // Initialize Sortable
+        const sortable = new Sortable(rightCol, {
+            group: `matching-${index}`,
+            animation: 150,
+            ghostClass: 'sortable-ghost'
+        });
+        
+        // Store instance for cleanup
+        sortableInstances.set(rightCol.id, sortable);
     }
 
+    function renderOrdering(container, question, index) {
+        const orderingContainer = document.createElement('div');
+        orderingContainer.className = 'ordering-container';
+        orderingContainer.id = `ordering-${index}`;
 
-    // --- Input Handling & Validation ---
+        // Create and shuffle items
+        const shuffledItems = [...question.items]
+            .sort(() => Math.random() - 0.5);
+        
+        shuffledItems.forEach(item => {
+            const itemEl = document.createElement('div');
+            itemEl.className = 'ordering-item';
+            itemEl.textContent = item;
+            orderingContainer.appendChild(itemEl);
+        });
 
-    function handleNextButtonClick() {
-        const question = currentQuiz.questions[currentQuestionIndex];
-        let userAnswer = getUserAnswer(question);
+        container.appendChild(orderingContainer);
 
-        if (userAnswer === null) {
-             // Indicate that an answer is required
-             showFeedback("Please provide an answer.", "incorrect");
-             return;
-        }
-
-        // Finalize answer and check correctness
-        userAnswer.isCorrect = checkAnswer(question, userAnswer);
-        userAnswers[question.questionId] = userAnswer; // Store the processed answer
-        console.log("User Answer stored:", question.questionId, userAnswer);
-
-
-        // --- Feedback Timing ---
-        if (currentQuiz.feedbackTiming === 'each') {
-            showFeedback(userAnswer.isCorrect ? "Correct!" : "Incorrect", userAnswer.isCorrect ? "correct" : "incorrect");
-            disableInputs(question.questionType); // Disable input for this question
-        }
-
-        // --- Move to Next Question or Finish ---
-        currentQuestionIndex++;
-        if (currentQuestionIndex < currentQuiz.questions.length) {
-            renderQuestion(currentQuestionIndex);
-        } else {
-            // Last question answered, move to finish/results
-            finishQuiz();
-        }
+        // Initialize Sortable
+        const sortable = new Sortable(orderingContainer, {
+            animation: 150,
+            ghostClass: 'sortable-ghost'
+        });
+        
+        // Store instance for cleanup
+        sortableInstances.set(orderingContainer.id, sortable);
     }
 
-    function getUserAnswer(question) {
-        // Returns structured answer object or null if invalid/incomplete
-        let answer = { answer: null }; // Basic structure
-        try {
-            switch (question.questionType) {
-                case 'multipleChoice':
-                    const selectedRadio = answerArea.querySelector('input[name="mc-answer"]:checked');
-                    if (!selectedRadio) return null; // No selection
-                    
-                    const selectedOptionId = selectedRadio.value;
-                    const selectedOption = question.options.find(opt => opt.optionId === selectedOptionId);
-                    
-                    if (!selectedOption) {
-                        console.error("Selected option not found in question data");
-                        return null;
-                    }
-                    
-                    answer.answer = selectedOptionId; // Store ID
-                    answer.selectedText = selectedOption.text || ''; // Store text for results display
-                    break;
-                    
-                case 'fillBlank':
-                    const textInput = document.getElementById('fillblank-answer');
-                    if (!textInput || textInput.value.trim() === '') return null;
-                    
-                    answer.answer = textInput.value;
-                    answer.text = textInput.value; // Store raw text
-                    break;
-                    
+    function checkAnswers() {
+        if (!currentQuiz) return;
+
+        const results = currentQuiz.questions.map((question, index) => {
+            switch (question.type) {
                 case 'matching':
-                    const matches = [];
-                    const promptElements = document.querySelectorAll('#match-prompts-col .quiz-match-prompt');
-                    
-                    // Check if all prompts have a match
-                    let allMatched = true;
-                    
-                    promptElements.forEach(promptDiv => {
-                        const promptId = promptDiv.dataset.promptId;
-                        const promptText = promptDiv.querySelector('span').textContent;
-                        const dropZone = promptDiv.querySelector('.quiz-match-drop-zone');
-                        const droppedItem = dropZone.querySelector('.quiz-match-item');
-                        
-                        // Get answer data, if present
-                        const answerId = droppedItem?.dataset.answerId || null;
-                        const answerText = droppedItem?.textContent.trim() || null;
-                        
-                        if (!answerId) allMatched = false; // Incomplete if any zone is empty
-                        
-                        // Add to matches array regardless (with null if no match)
-                        matches.push({
-                            promptId: promptId,
-                            promptText: promptText,
-                            answerId: answerId,
-                            answerText: answerText
-                        });
-                    });
-                    
-                    if (!allMatched) return null; // Require all prompts to have a match attempted
-                    
-                    // Store both simple and detailed versions
-                    answer.answer = matches.map(m => ({ promptId: m.promptId, answerId: m.answerId }));
-                    answer.matches = matches.map(m => ({ prompt: m.promptText, answer: m.answerText }));
-                    break;
-                    
+                    return checkMatchingAnswer(question, index);
                 case 'ordering':
-                    const orderedItems = Array.from(
-                        document.querySelectorAll('#order-drop-area .quiz-order-item span:last-child')
-                    ).map(span => span.textContent.trim());
-                    
-                    if (orderedItems.length !== question.items.length) {
-                        console.error("Mismatch between ordered items and question items");
-                        return null;
-                    }
-                    
-                    answer.answer = orderedItems;
-                    answer.orderedItems = orderedItems; // Store for display
-                    break;
-                    
+                    return checkOrderingAnswer(question, index);
                 default:
-                    console.error("Unknown question type:", question.questionType);
-                    return null;
-            }
-            return answer;
-        } catch (error) {
-            console.error("Error getting user answer:", error);
-            return null;
-        }
-    }
-     function checkAnswer(question, userAnswer) {
-         try {
-            switch (question.questionType) {
-                case 'multipleChoice':
-                    const correctOption = question.options.find(opt => opt.isCorrect);
-                    return userAnswer.answer === correctOption?.optionId;
-                case 'fillBlank':
-                    const correctAnswer = question.correctAnswer;
-                    const userText = userAnswer.text;
-                    if (question.caseSensitive) {
-                        return userText === correctAnswer;
-                    } else {
-                        return userText.toLowerCase() === correctAnswer.toLowerCase();
-                    }
-                case 'matching':
-                    // Check if every promptId is matched with the correct answerId
-                    return userAnswer.answer.every(match => match.answerId === match.promptId);
-                case 'ordering':
-                    // Check if the user's order matches the defined correct order
-                    if (userAnswer.answer.length !== question.items.length) return false;
-                    return userAnswer.answer.every((item, index) => item === question.items[index]);
-                default: return false;
-            }
-         } catch (error) {
-             console.error("Error checking answer:", error);
-             return false;
-         }
-     }
-
-     function disableInputs(questionType) {
-         nextButton.disabled = true; // Temporarily disable while showing feedback maybe? Or keep enabled? Let's keep enabled.
-
-         switch (questionType) {
-            case 'multipleChoice':
-                answerArea.querySelectorAll('input[name="mc-answer"]').forEach(radio => radio.disabled = true);
-                answerArea.querySelectorAll('label').forEach(label => label.classList.add('disabled'));
-                break;
-            case 'fillBlank':
-                const textInput = document.getElementById('fillblank-answer');
-                if (textInput) textInput.disabled = true;
-                break;
-            case 'matching':
-                 // Disable drag/drop
-                 clearSortableInstances(true); // Pass true to disable, not just destroy
-                 answerArea.querySelectorAll('.quiz-match-item, .quiz-match-prompt').forEach(el => el.classList.add('disabled'));
-                break;
-            case 'ordering':
-                 // Disable drag/drop
-                 clearSortableInstances(true);
-                 answerArea.querySelectorAll('.quiz-order-item').forEach(el => el.classList.add('disabled'));
-                 answerArea.querySelectorAll('.order-handle').forEach(el => el.style.cursor = 'default');
-                 break;
-         }
-     }
-
-     function showFeedback(message, typeClass) { // typeClass = 'correct' or 'incorrect'
-        feedbackArea.textContent = message;
-        feedbackArea.className = `quiz-question-feedback-area ${typeClass}`; // Add class for styling
-     }
-
-    // --- Finishing and Results ---
-
-    function finishQuiz() {
-        console.log("Quiz finished. Calculating score...");
-        playerModal.classList.remove('active'); // Close player modal
-        clearSortableInstances();
-
-        const score = calculateScore();
-        console.log("Final Score:", score);
-
-        // Store completion time
-        const completionTime = Date.now() - quizStartTime;
-        
-        // Keep reference to callback since it might be lost if quiz is reset
-        const completionCallback = onQuizCompleteCallback;
-
-        // Handle feedback based on timing setting
-        switch (currentQuiz.feedbackTiming) {
-            case 'none':
-                // No results shown, just complete the interaction
-                console.log("Quiz feedback timing: none");
-                if (completionCallback) {
-                    setTimeout(completionCallback, 50); // Small delay
-                }
-                break;
-                
-            case 'each': 
-                // Feedback was shown after each question
-                console.log("Quiz feedback timing: each question");
-                if (completionCallback) {
-                    setTimeout(completionCallback, 50); // Small delay
-                }
-                break;
-                
-            case 'end':
-            case 'emailUser':
-            case 'emailCreator':
-                // Show results modal with score
-                console.log("Quiz feedback timing:", currentQuiz.feedbackTiming);
-                showResultsModal(score);
-                // onQuizCompleteCallback is called when results modal is closed
-                break;
-                
-            default:
-                console.warn("Unknown feedback timing:", currentQuiz.feedbackTiming);
-                if (completionCallback) {
-                    setTimeout(completionCallback, 50); // Small delay
-                }
-        }
-        
-        // Reset internal state for next quiz
-        // Keep userAnswers and currentQuiz for results display
-        currentQuestionIndex = 0;
-    }
-
-    function calculateScore() {
-        let correctCount = 0;
-        currentQuiz.questions.forEach(q => {
-            if (userAnswers[q.questionId]?.isCorrect) {
-                correctCount++;
+                    return { correct: false, message: 'Unsupported question type' };
             }
         });
-        return { correct: correctCount, total: currentQuiz.questions.length };
-    }
 
-     function showResultsModal(score) {
-         resultsScore.textContent = `Score: ${score.correct} / ${score.total}`;
-         resultsEmailSection.style.display = 'none';
-         resultsCreatorMessage.style.display = 'none';
-         resultsEmailInput.value = '';
-         resultsEmailStatus.textContent = '';
-         resultsEmailStatusCreator.textContent = '';
-         resultsSendButton.disabled = false;
-         resultsEmailStatus.className = '';
-         resultsEmailStatusCreator.className = '';
-
-
-         if (currentQuiz.feedbackTiming === 'emailUser') {
-             resultsEmailSection.style.display = 'block';
-         } else if (currentQuiz.feedbackTiming === 'emailCreator') {
-              resultsCreatorMessage.style.display = 'block';
-              // Automatically send email in background? Or confirm? Let's auto-send.
-              handleSendEmailToCreator(score);
-         }
-
-         resultsModal.classList.add('active');
-     }
-
-    function closeResultsModal() {
-        if (!resultsModal) return;
+        showResults(results);
         
-        resultsModal.classList.remove('active');
-        
-        // Store reference to callback before clearing state
-        const callback = onQuizCompleteCallback;
-        
-        // Reset state
-        currentQuiz = null;
-        currentElementData = null;
-        userAnswers = {};
-        quizStartTime = null;
-        onQuizCompleteCallback = null;
-        
-        // Trigger the completion callback after the modal is closed and state is reset
-        if (callback) {
-            console.log("Results modal closed, triggering completion callback");
-            setTimeout(callback, 0); // Use setTimeout to ensure UI updates first
+        // If all questions are answered correctly
+        if (results.every(r => r.correct)) {
+            setTimeout(() => {
+                closeQuiz();
+                if (completionCallback) completionCallback();
+            }, 2000);
         }
     }
 
-    function prepareResultsPayload(score) {
-        // Structure data for backend email function
+    function checkMatchingAnswer(question, index) {
+        const rightCol = document.getElementById(`matching-right-${index}`);
+        if (!rightCol) return { correct: false, message: 'Question not found' };
+
+        const currentOrder = Array.from(rightCol.children).map(el => el.textContent);
+        const correctOrder = question.pairs.map(pair => pair.right);
+
+        const isCorrect = currentOrder.every((item, i) => item === correctOrder[i]);
         return {
-            projectTitle: StateManager.getProjectTitle(), // Get project title from state
-            quizTitle: currentElementData?.nickname || 'Quiz', // Get nickname of trigger element
-            timestamp: quizStartTime ? new Date(quizStartTime).toISOString() : new Date().toISOString(),
-            score: score,
-            questions: currentQuiz.questions.map(q => ({ // Send question structure for context
-                questionId: q.questionId,
-                questionType: q.questionType,
-                prompt: q.prompt
-                // Don't send correct answers usually, unless needed for review email
-            })),
-            userAnswers: userAnswers // Send the recorded user answers (includes correctness)
+            correct: isCorrect,
+            message: isCorrect ? 'Correct!' : 'Try again'
         };
     }
 
-    async function handleSendEmailToUser() {
-        const userEmail = resultsEmailInput.value;
-        
-        // Improved validation
-        if (!userEmail || !/^\S+@\S+\.\S+$/.test(userEmail)) {
-            resultsEmailStatus.textContent = 'Please enter a valid email address.';
-            resultsEmailStatus.className = 'error';
-            return;
-        }
+    function checkOrderingAnswer(question, index) {
+        const container = document.getElementById(`ordering-${index}`);
+        if (!container) return { correct: false, message: 'Question not found' };
 
-        resultsSendButton.disabled = true;
-        resultsEmailStatus.textContent = 'Sending...';
-        resultsEmailStatus.className = 'info';
+        const currentOrder = Array.from(container.children).map(el => el.textContent);
+        const correctOrder = question.items;
 
-        try {
-            const score = calculateScore();
-            const payload = prepareResultsPayload(score);
-            
-            // Validate payload before sending
-            if (!payload || !payload.questions || !payload.userAnswers) {
-                throw new Error("Invalid quiz data for email");
-            }
-            
-            await ServerClient.sendQuizToUser(payload, userEmail);
-            resultsEmailStatus.textContent = 'Results sent successfully!';
-            resultsEmailStatus.className = 'success';
-            
-            // Close modal after a short delay
-            setTimeout(closeResultsModal, 1500);
-        } catch (error) {
-            console.error("Error sending email to user:", error);
-            resultsEmailStatus.textContent = `Error: ${error.message}`;
-            resultsEmailStatus.className = 'error';
-            resultsSendButton.disabled = false; // Re-enable for retry
-        }
+        const isCorrect = currentOrder.every((item, i) => item === correctOrder[i]);
+        return {
+            correct: isCorrect,
+            message: isCorrect ? 'Correct!' : 'Try again'
+        };
     }
 
-    async function handleSendEmailToCreator(score) {
-        const creatorEmail = currentQuiz.creatorEmail;
-        
-        if (!creatorEmail || !/^\S+@\S+\.\S+$/.test(creatorEmail)) {
-            resultsEmailStatusCreator.textContent = 'Error: Creator email address is invalid in quiz configuration.';
-            resultsEmailStatusCreator.className = 'error';
-            return; // Don't proceed
-        }
-
-        resultsEmailStatusCreator.textContent = 'Sending results to creator...';
-        resultsEmailStatusCreator.className = 'info';
-
-        try {
-            const payload = prepareResultsPayload(score);
-            // Add user info if possible/allowed (Apps Script session user)
-            // The backend function Code.gs already does this.
-            await ServerClient.sendQuizToCreator(payload, creatorEmail);
-            resultsEmailStatusCreator.textContent = 'Results sent to creator.';
-            resultsEmailStatusCreator.className = 'success';
-        } catch (error) {
-            console.error("Error sending email to creator:", error);
-            resultsEmailStatusCreator.textContent = `Error sending: ${error.message}`;
-            resultsEmailStatusCreator.className = 'error';
-            // Don't disable close button
-        }
-    }
-
-
-    // --- Utility ---
-    function clearSortableInstances(disableOnly = false) {
-        sortableInstances.forEach(instance => {
-            if (disableOnly) {
-                instance.option('disabled', true);
-            } else {
-                 try { instance.destroy(); } catch (e) { /* ignore if already destroyed */ }
+    function showResults(results) {
+        results.forEach((result, index) => {
+            const questionEl = document.querySelector(`.quiz-question:nth-child(${index + 1})`);
+            if (questionEl) {
+                questionEl.classList.remove('correct', 'incorrect');
+                questionEl.classList.add(result.correct ? 'correct' : 'incorrect');
+                
+                // Show feedback message
+                let feedback = questionEl.querySelector('.feedback');
+                if (!feedback) {
+                    feedback = document.createElement('div');
+                    feedback.className = 'feedback';
+                    questionEl.appendChild(feedback);
+                }
+                feedback.textContent = result.message;
             }
         });
-         if (!disableOnly) {
-            sortableInstances = [];
-         }
     }
 
-
-    // --- Public API ---
-    _init(); // Initialize internal listeners
     return {
+        init,
         openQuiz,
-        // No explicit close needed, handled internally by finishQuiz or cancellation (if added)
-        closeResultsModal // Allow closing results modal via button
+        closeQuiz,
+        checkAnswers,
+        cleanup
     };
-
 })();
 </script>
