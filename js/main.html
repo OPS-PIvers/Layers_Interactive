@@ -1,3 +1,4 @@
+<script>
 // Global initialization function called from HTML body script tag
 async function initializeApp(view, projectId = null) {
   console.log(`Initializing App - View: ${view}, ProjectID: ${projectId}`);
@@ -77,3 +78,4 @@ window.addEventListener('beforeunload', (event) => {
         return confirmationMessage; // For older browsers
     }
 });
+</script>
