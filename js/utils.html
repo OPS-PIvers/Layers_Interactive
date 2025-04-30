@@ -175,19 +175,31 @@
       }
       
       /**
-       * Add event listener using selector
-       * @param {string} selector - CSS selector
+       * Add event listener using selector or element
+       * @param {string|HTMLElement} selectorOrElement - CSS selector or DOM element
        * @param {string} event - Event type
        * @param {Function} handler - Event handler
        * @return {HTMLElement|null} The element if found, null otherwise
        */
-      function listen(selector, event, handler) {
-        const element = document.querySelector(selector);
+      function listen(selectorOrElement, event, handler) {
+        let element;
+        
+        if (typeof selectorOrElement === 'string') {
+          // It's a selector string
+          element = document.querySelector(selectorOrElement);
+        } else if (selectorOrElement instanceof HTMLElement) {
+          // It's already a DOM element
+          element = selectorOrElement;
+        } else {
+          console.warn('Invalid selector or element:', selectorOrElement);
+          return null;
+        }
+        
         if (element) {
           element.addEventListener(event, handler);
           return element;
         } else {
-          console.warn(`Element not found: ${selector}`);
+          console.warn(`Element not found or invalid`);
           return null;
         }
       }
@@ -204,7 +216,7 @@
         shuffleArray,
         formatTimestamp,
         formatTime,
-        listen  // Add the listen function to the public API
+        listen
       };
     })();
     </script>
