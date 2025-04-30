@@ -1,127 +1,127 @@
 <script>
-// Ensure proper initialization order
-document.addEventListener('DOMContentLoaded', () => {
-    let initAttempts = 0;
-    const maxAttempts = 5;
-    
-    function initializeApp(mode, projectId) {
-        try {
-            console.log(`Initializing app in ${mode || 'default'} mode${projectId ? ' with project: ' + projectId : ''}`);
-            // Check for required DOM elements
-            const editorCanvas = document.getElementById('editor-canvas');
-            const viewerCanvas = document.getElementById('viewer-canvas');
-            
-            // Different required elements based on mode
-            let requiredElements = [
-                'loading-indicator', 
-                'error-message'
-            ];
-            
-            // Add mode-specific required elements
-            if (mode === 'editor' || editorCanvas) {
-                requiredElements = requiredElements.concat([
-                    'properties-panel',
-                    'toolbar',
-                    'slide-list',
-                    'sequence-list'
-                ]);
-            }
-
-            const missingElements = requiredElements.filter(id => !document.getElementById(id));
-            
-            if (missingElements.length > 0) {
-                throw new Error(`Missing required elements: ${missingElements.join(', ')}`);
-            }
-
-            // Initialize modules in correct order
-            Utils.init(); // Initialize utility functions and DOM references first
-            StateManager.init(); // Initialize state management
-            
-            // Initialize canvas controllers
-            if (mode === 'editor' || editorCanvas) {
-                console.log("Initializing editor components");
-                CanvasController.initCanvas('editor-canvas', true);
-                EditorUI.init(); // Initialize editor UI components
-                QuizEditor.initQuizEditor(); // Initialize quiz editing capabilities
-            } else if (mode === 'viewer' || viewerCanvas) {
-                console.log("Initializing viewer components");
-                CanvasController.initCanvas('viewer-canvas', false);
-                InteractionHandler.init('viewer'); // Initialize viewer interaction handling
-                QuizPlayer.init(); // Initialize quiz playing capabilities
-                
-                // Load project if projectId is provided
-                if (projectId) {
-                    loadViewerProject(projectId);
-                }
-            } else {
-                throw new Error("Could not determine application mode");
-            }
-
-            // Load initial content if available (for editor)
-            if (!projectId && mode === 'editor') {
-                const initialData = window.INITIAL_DATA || null;
-                if (initialData) {
-                    StateManager.loadProject(initialData);
-                }
-            }
-
-            console.log('Application initialized successfully');
-            
-        } catch (error) {
-            console.error('Initialization error:', error);
-            initAttempts++;
-            
-            if (initAttempts < maxAttempts) {
-                console.log(`Retrying initialization in 100ms (attempt ${initAttempts}/${maxAttempts})`);
-                setTimeout(() => initializeApp(mode, projectId), 100);
-            } else {
-                Utils.showError('Failed to initialize application. Please refresh the page.');
-            }
-        }
-    }
-
-    // Function to load a project for the viewer
-    async function loadViewerProject(projectId) {
-        console.log("Loading project for viewer:", projectId);
-        Utils.showLoadingIndicator(true, 'Loading Project...');
+    // Ensure proper initialization order
+    document.addEventListener('DOMContentLoaded', () => {
+        let initAttempts = 0;
+        const maxAttempts = 5;
         
-        try {
-            const jsonString = await ServerClient.loadProject(projectId);
-            if (StateManager.loadProjectData(jsonString)) {
-                // Load the first slide
-                const slide = StateManager.getCurrentSlide();
-                if (slide) {
-                    CanvasController.loadSlide(slide);
-                    console.log("Project loaded successfully in viewer mode");
-                    
-                    // Set up sequence if available
-                    InteractionHandler.setupSequence();
+        function initializeApp(mode, projectId) {
+            try {
+                console.log(`Initializing app in ${mode || 'default'} mode${projectId ? ' with project: ' + projectId : ''}`);
+                // Check for required DOM elements
+                const editorCanvas = document.getElementById('editor-canvas');
+                const viewerCanvas = document.getElementById('viewer-canvas');
+                
+                // Different required elements based on mode
+                let requiredElements = [
+                    'loading-indicator', 
+                    'message-modal'  // Changed from 'error-message' to 'message-modal'
+                ];
+                
+                // Add mode-specific required elements
+                if (mode === 'editor' || editorCanvas) {
+                    requiredElements = requiredElements.concat([
+                        'properties-panel',
+                        'toolbar',
+                        'slide-navigator', // Changed from 'slide-list' to 'slide-navigator'
+                        'sequence-list'
+                    ]);
                 }
-            } else {
-                throw new Error("Failed to load project data");
+    
+                const missingElements = requiredElements.filter(id => !document.getElementById(id));
+                
+                if (missingElements.length > 0) {
+                    throw new Error(`Missing required elements: ${missingElements.join(', ')}`);
+                }
+    
+                // Initialize modules in correct order
+                Utils.init(); // Initialize utility functions and DOM references first
+                StateManager.init(); // Initialize state management
+                
+                // Initialize canvas controllers
+                if (mode === 'editor' || editorCanvas) {
+                    console.log("Initializing editor components");
+                    CanvasController.initCanvas('editor-canvas', true);
+                    EditorUI.init(); // Initialize editor UI components
+                    QuizEditor.initQuizEditor(); // Initialize quiz editing capabilities
+                } else if (mode === 'viewer' || viewerCanvas) {
+                    console.log("Initializing viewer components");
+                    CanvasController.initCanvas('viewer-canvas', false);
+                    InteractionHandler.init('viewer'); // Initialize viewer interaction handling
+                    QuizPlayer.init(); // Initialize quiz playing capabilities
+                    
+                    // Load project if projectId is provided
+                    if (projectId) {
+                        loadViewerProject(projectId);
+                    }
+                } else {
+                    throw new Error("Could not determine application mode");
+                }
+    
+                // Load initial content if available (for editor)
+                if (!projectId && mode === 'editor') {
+                    const initialData = window.INITIAL_DATA || null;
+                    if (initialData) {
+                        StateManager.loadProject(initialData);
+                    }
+                }
+    
+                console.log('Application initialized successfully');
+                
+            } catch (error) {
+                console.error('Initialization error:', error);
+                initAttempts++;
+                
+                if (initAttempts < maxAttempts) {
+                    console.log(`Retrying initialization in 100ms (attempt ${initAttempts}/${maxAttempts})`);
+                    setTimeout(() => initializeApp(mode, projectId), 100);
+                } else {
+                    Utils.showError('Failed to initialize application. Please refresh the page.');
+                }
             }
-        } catch (error) {
-            console.error("Failed to load project:", error);
-            Utils.showError(`Failed to load project: ${error.message}`);
-        } finally {
-            Utils.showLoadingIndicator(false);
         }
-    }
-
-    // initializeApp will be called by the specific HTML page
-    window.initializeApp = initializeApp;
-});
-
-// Optional: Add beforeunload listener for editor to warn about unsaved changes
-window.addEventListener('beforeunload', (event) => {
-    // Check if the current view is 'editor' (this requires a way to know the view mode globally)
-    // A simple check: presence of editor-specific elements
-    const isEditorView = !!document.getElementById('editor-canvas');
-
-    if (isEditorView && StateManager.isDirty()) {
-        const confirmationMessage = 'You have unsaved changes. Are you sure you want to leave?';
-        event.returnValue = confirmationMessage; // Standard for most browsers
-        return confirmationMessage; // For older browsers
-    }
-});
+    
+        // Function to load a project for the viewer
+        async function loadViewerProject(projectId) {
+            console.log("Loading project for viewer:", projectId);
+            Utils.showLoadingIndicator(true, 'Loading Project...');
+            
+            try {
+                const jsonString = await ServerClient.loadProject(projectId);
+                if (StateManager.loadProjectData(jsonString)) {
+                    // Load the first slide
+                    const slide = StateManager.getCurrentSlide();
+                    if (slide) {
+                        CanvasController.loadSlide(slide);
+                        console.log("Project loaded successfully in viewer mode");
+                        
+                        // Set up sequence if available
+                        InteractionHandler.setupSequence();
+                    }
+                } else {
+                    throw new Error("Failed to load project data");
+                }
+            } catch (error) {
+                 console.error("Failed to load project:", error);
+                 Utils.showError(`Failed to load project: ${error.message}`);
+            } finally {
+                Utils.showLoadingIndicator(false);
+            }
+        }
+    
+        // initializeApp will be called by the specific HTML page
+        window.initializeApp = initializeApp;
+    });
+    
+    // Optional: Add beforeunload listener for editor to warn about unsaved changes
+    window.addEventListener('beforeunload', (event) => {
+        // Check if the current view is 'editor' (this requires a way to know the view mode globally)
+        // A simple check: presence of editor-specific elements
+        const isEditorView = !!document.getElementById('editor-canvas');
+    
+        if (isEditorView && StateManager.isDirty()) {
+            const confirmationMessage = 'You have unsaved changes. Are you sure you want to leave?';
+            event.returnValue = confirmationMessage; // Standard for most browsers
+            return confirmationMessage; // For older browsers
+        }
+    });
 </script>
