@@ -2,110 +2,54 @@
 <html>
 <head>
   <base target="_top">
-   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Interactive Training Viewer</title>
-  <!-- Fabric JS -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Interactive Training</title>
+  <!-- Fabric.js library -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
-  <!-- Sortable JS (for quiz player matching/ordering) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
-  <!-- Styles -->
-  <?!= HtmlService.createHtmlOutputFromFile('css/styles').getContent(); ?>
+  <!-- SortableJS for drag and drop -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <!-- Google Fonts API -->
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&family=Open+Sans:wght@400;700&family=Lato:wght@400;700&display=swap" rel="stylesheet">
+  <!-- CSS includes -->
+  <?!= include('css/styles') ?>
+  <?!= include('css/animations') ?>
 </head>
+
 <body class="viewer-view">
-  <!-- Canvas Area -->
   <div id="canvas-container">
-      <canvas id="viewer-canvas"></canvas>
+    <canvas id="viewer-canvas"></canvas>
+    <div id="youtube-container" style="display:none;"></div>
+  </div>
+  
+  <div id="viewer-navigation" style="display:none;">
+    <button id="prev-step-button" disabled>Previous</button>
+    <span id="step-indicator"></span>
+    <button id="next-step-button">Next</button>
   </div>
 
-  <!-- Optional Navigation Bar -->
-  <div id="viewer-navigation" style="display: none;"> <!-- Initially hidden, shown if sequence enabled -->
-    <button id="prev-step-button" title="Previous Step" disabled><span class="icon">◀</span> Previous</button>
-    <span id="step-indicator">Step 0 / 0</span>
-    <button id="next-step-button" title="Next Step" disabled><span class="icon">▶</span> Next</button>
-  </div>
+  <!-- Modals -->
+  <div id="quiz-player-modal" class="modal"></div>
+  <div id="quiz-results-modal" class="modal"></div>
+  <div id="loading-indicator" class="modal">Loading...</div>
+  <div id="message-modal" class="modal"></div>
 
-  <!-- Quiz Player Modal -->
-  <div id="quiz-player-modal" class="modal">
-       <div class="modal-content large">
-           <!-- No close button intentionally? Or allow closing/cancelling? -->
-           <!-- <span class="close-button" onclick="QuizPlayer.closeQuiz()">×</span> -->
-           <h2 id="quiz-player-title">Quiz</h2>
-           <div id="quiz-player-body">
-               <div id="quiz-question-prompt"></div>
-               <div id="quiz-question-answer-area"></div>
-               <div id="quiz-question-feedback-area"></div>
-           </div>
-           <div class="modal-footer">
-                <button id="quiz-player-next-button">Next Question</button>
-                <!-- Finish button shown on last question -->
-           </div>
-       </div>
-  </div>
-
-  <!-- Quiz Results Modal -->
-  <div id="quiz-results-modal" class="modal">
-       <div class="modal-content medium">
-           <span class="close-button" onclick="QuizPlayer.closeResultsModal()">×</span>
-           <h2 id="quiz-results-title">Quiz Complete!</h2>
-           <div id="quiz-results-body">
-               <p id="quiz-results-score">Score: X / Y</p>
-               <div id="quiz-results-email-section" style="display:none;">
-                  <p>Enter your email to receive results:</p>
-                  <input type="email" id="quiz-results-email-input" placeholder="your.email@example.com">
-                  <button id="quiz-results-send-button">Send Results</button>
-                  <span id="quiz-results-email-status"></span>
-               </div>
-                <div id="quiz-results-creator-message" style="display:none;">
-                   <p>Your results will be sent to the creator.</p>
-                    <span id="quiz-results-email-status-creator"></span>
-               </div>
-           </div>
-            <div class="modal-footer">
-                 <button id="quiz-results-close-button" onclick="QuizPlayer.closeResultsModal()">Close</button>
-            </div>
-       </div>
-  </div>
-
-  <!-- General Modals -->
-   <div id="loading-indicator" class="modal">
-      <div class="modal-content small centered">
-          <div class="spinner"></div>
-          <p>Loading Project...</p>
-      </div>
-  </div>
-   <div id="error-indicator" class="modal">
-      <div class="modal-content small centered error">
-          <h3>Error</h3>
-          <p id="error-message"></p>
-          <button onclick="Utils.hideError()">Close</button>
-      </div>
-   </div>
-
-  <!-- Scripts -->
-  <?!= HtmlService.createHtmlOutputFromFile('js/utils').getContent(); ?>
-  <?!= HtmlService.createHtmlOutputFromFile('js/serverClient').getContent(); ?>
-  <?!= HtmlService.createHtmlOutputFromFile('js/stateManager').getContent(); ?>
-  <?!= HtmlService.createHtmlOutputFromFile('js/canvasController').getContent(); ?>
-  <?!= HtmlService.createHtmlOutputFromFile('js/quizPlayer').getContent(); ?>
-  <?!= HtmlService.createHtmlOutputFromFile('js/interactionHandler').getContent(); ?>
-  <?!= HtmlService.createHtmlOutputFromFile('js/main').getContent(); ?>
+  <!-- JS includes -->
+  <?!= include('js/utils') ?>
+  <?!= include('js/serverClient') ?>
+  <?!= include('js/stateManager') ?>
+  <?!= include('js/canvasController') ?>
+  <?!= include('js/interactionHandler') ?>
+  <?!= include('js/animationController') ?>
+  <?!= include('js/fontLoader') ?>
+  <?!= include('js/quizPlayer') ?>
+  <?!= include('js/youtubeManager') ?>
+  <?!= include('js/main') ?>
 
   <script>
-    // Initialize the viewer application once the DOM is ready
     document.addEventListener('DOMContentLoaded', () => {
-      // Extract projectId from the template variable - using a safer method
-      // that avoids Expression expected errors
-      var projectIdObj = JSON.parse('<?!= projectId ? JSON.stringify(projectId) : "null" ?>');
-      var projectId = projectIdObj;
-      
-      if (projectId) {
-        initializeApp('viewer', projectId);
-      } else {
-         // Handle case where projectId is missing - Show an error message directly
-         document.body.innerHTML = '<div class="error-page"><h1>Error</h1><p>No Project ID provided. Cannot load training.</p></div>';
-         // CSS is already loaded in the head section, no need to add it again
-      }
+      const params = new URLSearchParams(window.location.search);
+      initializeApp('viewer', params.get('projectId'));
     });
   </script>
 </body>

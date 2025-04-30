@@ -1,366 +1,460 @@
 <script>
-const StateManager = (() => {
-    let currentProject = null;
-    let currentSlideId = null;
-    let isDirtyFlag = false;
-    let sequenceActive = false;
-    let currentSequenceIndex = -1;
-    let actionHistory = [];
-    let subscribers = new Map();
-
-    function init(resetData = false) {
-        if (resetData) {
-            currentProject = createNewProject();
-            currentSlideId = currentProject.slides[0].slideId;
-            isDirtyFlag = false;
-            sequenceActive = false;
-            currentSequenceIndex = -1;
-            actionHistory = [];
+    /**
+     * Manages application state and data
+     */
+    const StateManager = (() => {
+      // Current project data
+      let currentProject = null;
+      
+      // Current selected items
+      let currentSlideId = null;
+      let currentSequenceIndex = -1;
+      
+      // Action history for undo/redo
+      let actionHistory = [];
+      
+      // View state (editor or viewer)
+      let isEditorMode = true;
+      
+      /**
+       * Initialize state manager
+       * @param {boolean} editorMode - Whether in editor mode
+       */
+      function init(editorMode = true) {
+        currentProject = null;
+        currentSlideId = null;
+        currentSequenceIndex = -1;
+        actionHistory = [];
+        isEditorMode = editorMode;
+        
+        // Create empty project if in editor mode
+        if (editorMode) {
+          createNewProject();
         }
-        notifySubscribers('projectChanged');
-    }
-
-    // Subscribe to state changes
-    function subscribe(eventType, callback) {
-        if (!subscribers.has(eventType)) {
-            subscribers.set(eventType, new Set());
-        }
-        subscribers.get(eventType).add(callback);
-        return () => unsubscribe(eventType, callback);
-    }
-
-    function unsubscribe(eventType, callback) {
-        if (subscribers.has(eventType)) {
-            subscribers.get(eventType).delete(callback);
-        }
-    }
-
-    function notifySubscribers(eventType, data) {
-        if (subscribers.has(eventType)) {
-            subscribers.get(eventType).forEach(callback => {
-                try {
-                    callback(data);
-                } catch (error) {
-                    console.error(`Error in subscriber callback for ${eventType}:`, error);
-                }
-            });
-        }
-    }
-
-    // Project state management
-    function createNewProject() {
-        return {
-            projectId: null,
-            title: 'Untitled Project',
-            lastModified: Date.now(),
-            slides: [{
-                slideId: Utils.generateUUID(),
-                title: 'Slide 1',
-                elements: [],
-                sequence: [],
-                backgroundColor: '#FFFFFF',
-                imageFileId: null
-            }],
-            viewerSettings: {
-                enablePrevNext: true,
-                allowSkip: false,
-                showProgress: true
-            }
+      }
+      
+      /**
+       * Create a new empty project
+       */
+      function createNewProject() {
+        currentProject = {
+          projectId: null,
+          title: 'Untitled Project',
+          createdAt: Date.now(),
+          modifiedAt: Date.now(),
+          slides: []
         };
-    }
-
-    function updateElementData(elementId, updates) {
-        if (!currentProject || !currentSlideId) return false;
         
-        try {
-            const slide = getCurrentSlide();
-            if (!slide) return false;
-
-            const elementIndex = slide.elements.findIndex(el => el.id === elementId);
-            if (elementIndex === -1) return false;
-
-            // Create a new element object with updates
-            const updatedElement = {
-                ...slide.elements[elementIndex],
-                ...updates,
-                // Handle nested objects carefully
-                style: { ...slide.elements[elementIndex].style, ...(updates.style || {}) },
-                interactions: {
-                    ...slide.elements[elementIndex].interactions,
-                    ...(updates.interactions || {}),
-                    // Preserve nested feature structure
-                    features: {
-                        ...slide.elements[elementIndex].interactions?.features,
-                        ...(updates.interactions?.features || {})
-                    }
-                }
-            };
-
-            // Update the elements array
-            slide.elements[elementIndex] = updatedElement;
-            
-            setDirty(true);
-            notifySubscribers('elementChanged', { elementId, updates });
-            return true;
-        } catch (error) {
-            console.error('Error updating element data:', error);
-            return false;
-        }
-    }
-
-    function getElementData(elementId) {
-        const slide = getCurrentSlide();
-        return slide?.elements.find(el => el.id === elementId);
-    }
-
-    function addElementData(elementData) {
-        if (!currentProject || !currentSlideId) return false;
-        
-        const slide = getCurrentSlide();
-        if (!slide) return false;
-
-        // Ensure required properties exist
-        if (!elementData.id) elementData.id = Utils.generateUUID();
-        
-        slide.elements.push(elementData);
-        setDirty(true);
-        notifySubscribers('elementAdded', elementData);
-        return elementData.id;
-    }
-
-    function removeElementData(elementId) {
-        if (!currentProject || !currentSlideId) return false;
-        
-        const slide = getCurrentSlide();
-        if (!slide) return false;
-
-        const index = slide.elements.findIndex(el => el.id === elementId);
-        if (index === -1) return false;
-
-        // Remove from elements array
-        slide.elements.splice(index, 1);
-        
-        // Also remove from sequence if present
-        const seqIndex = slide.sequence.indexOf(elementId);
-        if (seqIndex !== -1) {
-            slide.sequence.splice(seqIndex, 1);
-        }
-
-        setDirty(true);
-        notifySubscribers('elementRemoved', elementId);
-        return true;
-    }
-
-    // Slide management
-    function getCurrentSlide() {
-        return currentProject?.slides.find(s => s.slideId === currentSlideId);
-    }
-
-    function getSlides() {
-        return currentProject?.slides || [];
-    }
-
-    function setCurrentSlideId(slideId) {
-        if (!currentProject) return false;
-        const slide = currentProject.slides.find(s => s.slideId === slideId);
-        if (!slide) return false;
-
-        currentSlideId = slideId;
-        notifySubscribers('slideChanged', slideId);
-        return true;
-    }
-
-    function addSlide() {
+        // Create initial slide
+        const slideId = createSlide();
+        setCurrentSlideId(slideId);
+      }
+      
+      /**
+       * Create a new slide
+       * @param {string} type - Slide type (image, youtube)
+       * @return {string} Slide ID
+       */
+      function createSlide(type = 'image') {
         if (!currentProject) return null;
         
+        const slideId = Utils.generateId('slide-');
         const newSlide = {
-            slideId: Utils.generateUUID(),
-            title: `Slide ${currentProject.slides.length + 1}`,
-            elements: [],
-            sequence: [],
-            backgroundColor: '#FFFFFF',
-            imageFileId: null
+          slideId,
+          slideType: type,
+          title: `Slide ${currentProject.slides.length + 1}`,
+          backgroundColor: '#FFFFFF',
+          elements: [],
+          sequence: []
         };
-
-        currentProject.slides.push(newSlide);
-        setDirty(true);
-        notifySubscribers('slideAdded', newSlide);
-        return newSlide.slideId;
-    }
-
-    function deleteSlide(slideId) {
-        if (!currentProject || currentProject.slides.length <= 1) return false;
-
-        const index = currentProject.slides.findIndex(s => s.slideId === slideId);
-        if (index === -1) return false;
-
-        currentProject.slides.splice(index, 1);
         
-        // If we deleted the current slide, switch to another one
-        if (slideId === currentSlideId) {
-            currentSlideId = currentProject.slides[Math.max(0, index - 1)].slideId;
+        // Add slide-type specific properties
+        if (type === 'youtube') {
+          newSlide.youtubeVideoId = '';
+          newSlide.overlayTimings = [];
         }
-
-        setDirty(true);
-        notifySubscribers('slideRemoved', { slideId, newCurrentId: currentSlideId });
-        return true;
-    }
-
-    // Sequence management
-    function getCurrentSequenceIndex() {
-        return currentSequenceIndex;
-    }
-
-    function getCurrentSequence() {
-        return getCurrentSlide()?.sequence || [];
-    }
-
-    function setCurrentSequenceIndex(index) {
-        currentSequenceIndex = index;
-        notifySubscribers('sequenceIndexChanged', index);
-    }
-
-    function startSequence() {
-        sequenceActive = true;
-        currentSequenceIndex = 0;
-        notifySubscribers('sequenceStarted');
-    }
-
-    function stopSequence() {
-        sequenceActive = false;
+        
+        currentProject.slides.push(newSlide);
+        return slideId;
+      }
+      
+      /**
+       * Load project data from JSON string
+       * @param {string} jsonString - Project data as JSON string
+       * @return {boolean} Success
+       */
+      function loadProjectData(jsonString) {
+        try {
+          currentProject = JSON.parse(jsonString);
+          
+          // Set first slide as current if available
+          if (currentProject.slides && currentProject.slides.length > 0) {
+            setCurrentSlideId(currentProject.slides[0].slideId);
+          } else {
+            currentSlideId = null;
+          }
+          
+          // Reset sequence index
+          currentSequenceIndex = -1;
+          actionHistory = [];
+          
+          return true;
+        } catch (error) {
+          console.error('Error parsing project data:', error);
+          return false;
+        }
+      }
+      
+      /**
+       * Get project data as JSON string
+       * @return {string} Project data as JSON string
+       */
+      function getProjectJsonString() {
+        if (!currentProject) return null;
+        return JSON.stringify(currentProject, null, 2);
+      }
+      
+      /**
+       * Get current project
+       * @return {Object} Current project
+       */
+      function getCurrentProject() {
+        return currentProject;
+      }
+      
+      /**
+       * Get current slide
+       * @return {Object} Current slide
+       */
+      function getCurrentSlide() {
+        if (!currentProject || !currentSlideId) return null;
+        return currentProject.slides.find(s => s.slideId === currentSlideId);
+      }
+      
+      /**
+       * Set current slide ID
+       * @param {string} slideId - Slide ID
+       */
+      function setCurrentSlideId(slideId) {
+        currentSlideId = slideId;
         currentSequenceIndex = -1;
-        notifySubscribers('sequenceStopped');
-    }
-
-    function isSequenceActive() {
-        return sequenceActive;
-    }
-
-    function getSlideSequence() {
-        return getCurrentSlide()?.sequence || [];
-    }
-
-    function setSlideSequence(sequence) {
+        actionHistory = [];
+      }
+      
+      /**
+       * Update slide properties
+       * @param {string} slideId - Slide ID
+       * @param {Object} properties - Properties to update
+       * @return {boolean} Success
+       */
+      function updateSlideProperties(slideId, properties) {
+        if (!currentProject) return false;
+        
+        const slideIndex = currentProject.slides.findIndex(s => s.slideId === slideId);
+        if (slideIndex === -1) return false;
+        
+        currentProject.slides[slideIndex] = {
+          ...currentProject.slides[slideIndex],
+          ...properties
+        };
+        
+        return true;
+      }
+      
+      /**
+       * Get element data by ID
+       * @param {string} elementId - Element ID
+       * @return {Object} Element data
+       */
+      function getElementData(elementId) {
+        const slide = getCurrentSlide();
+        if (!slide) return null;
+        
+        return slide.elements.find(el => el.id === elementId);
+      }
+      
+      /**
+       * Add element data
+       * @param {Object} elementData - Element data
+       * @return {string} Element ID
+       */
+      function addElementData(elementData) {
+        const slide = getCurrentSlide();
+        if (!slide) return null;
+        
+        // Create ID if not provided
+        const elementId = elementData.id || Utils.generateId('element-');
+        
+        // Ensure element has an ID
+        const newElement = {
+          ...elementData,
+          id: elementId,
+          createdAt: Date.now()
+        };
+        
+        // Add to slide elements
+        slide.elements.push(newElement);
+        
+        return elementId;
+      }
+      
+      /**
+       * Update element data
+       * @param {string} elementId - Element ID
+       * @param {Object} newData - Data to update
+       * @return {boolean} Success
+       */
+      function updateElementData(elementId, newData) {
         const slide = getCurrentSlide();
         if (!slide) return false;
-
-        slide.sequence = [...sequence];
-        setDirty(true);
-        notifySubscribers('sequenceUpdated', sequence);
+        
+        const elementIndex = slide.elements.findIndex(el => el.id === elementId);
+        if (elementIndex === -1) return false;
+        
+        // Deep merge the objects (simple approach)
+        slide.elements[elementIndex] = deepMerge(slide.elements[elementIndex], newData);
+        
         return true;
-    }
-
-    // Action history for undo/redo
-    function addActionToHistory(action) {
+      }
+      
+      /**
+       * Deep merge two objects
+       * @param {Object} target - Target object
+       * @param {Object} source - Source object
+       * @return {Object} Merged object
+       */
+      function deepMerge(target, source) {
+        const output = { ...target };
+        
+        if (isObject(target) && isObject(source)) {
+          Object.keys(source).forEach(key => {
+            if (isObject(source[key])) {
+              if (!(key in target)) {
+                output[key] = source[key];
+              } else {
+                output[key] = deepMerge(target[key], source[key]);
+              }
+            } else {
+              output[key] = source[key];
+            }
+          });
+        }
+        
+        return output;
+      }
+      
+      /**
+       * Check if value is an object
+       * @param {*} item - Value to check
+       * @return {boolean} Whether value is an object
+       */
+      function isObject(item) {
+        return item && typeof item === 'object' && !Array.isArray(item);
+      }
+      
+      /**
+       * Remove element data
+       * @param {string} elementId - Element ID
+       * @return {boolean} Success
+       */
+      function removeElementData(elementId) {
+        const slide = getCurrentSlide();
+        if (!slide) return false;
+        
+        // Remove from elements array
+        slide.elements = slide.elements.filter(el => el.id !== elementId);
+        
+        // Remove from sequence array
+        slide.sequence = slide.sequence.filter(id => id !== elementId);
+        
+        // Remove from overlay timings if YouTube slide
+        if (slide.slideType === 'youtube' && slide.overlayTimings) {
+          slide.overlayTimings = slide.overlayTimings.filter(timing => timing.elementId !== elementId);
+        }
+        
+        return true;
+      }
+      
+      /**
+       * Get slide sequence
+       * @return {Array} Sequence of element IDs
+       */
+      function getSlideSequence() {
+        const slide = getCurrentSlide();
+        return slide ? slide.sequence : [];
+      }
+      
+      /**
+       * Set slide sequence
+       * @param {Array} sequence - Sequence of element IDs
+       * @return {boolean} Success
+       */
+      function setSlideSequence(sequence) {
+        const slide = getCurrentSlide();
+        if (!slide) return false;
+        
+        slide.sequence = sequence;
+        return true;
+      }
+      
+      /**
+       * Get current sequence index
+       * @return {number} Sequence index
+       */
+      function getCurrentSequenceIndex() {
+        return currentSequenceIndex;
+      }
+      
+      /**
+       * Set current sequence index
+       * @param {number} index - Sequence index
+       */
+      function setCurrentSequenceIndex(index) {
+        currentSequenceIndex = index;
+      }
+      
+      /**
+       * Check if sequence is active
+       * @return {boolean} Whether sequence is active
+       */
+      function isSequenceActive() {
+        return currentSequenceIndex >= 0;
+      }
+      
+      /**
+       * Add action to history
+       * @param {Object} action - Action data
+       */
+      function addActionToHistory(action) {
+        // Limit history size
+        if (actionHistory.length >= 50) {
+          actionHistory.shift();
+        }
+        
         actionHistory.push(action);
-        notifySubscribers('historyUpdated', actionHistory);
-    }
-
-    function getActionHistory() {
-        return [...actionHistory];
-    }
-
-    function clearActionHistory() {
-        actionHistory = [];
-        notifySubscribers('historyCleared');
-    }
-
-    // Project state
-    function isDirty() {
-        return isDirtyFlag;
-    }
-
-    function setDirty(value) {
-        isDirtyFlag = value;
-        notifySubscribers('dirtyStateChanged', value);
-    }
-
-    function markAsSaved(projectId, timestamp) {
-        if (currentProject) {
-            currentProject.projectId = projectId;
-            currentProject.lastModified = timestamp;
+      }
+      
+      /**
+       * Pop action from history
+       * @return {Object} Action data
+       */
+      function popActionFromHistory() {
+        return actionHistory.pop();
+      }
+      
+      /**
+       * Get action history
+       * @return {Array} Action history
+       */
+      function getActionHistory() {
+        return actionHistory;
+      }
+      
+      /**
+       * Capture current state snapshot
+       * @return {Object} State snapshot
+       */
+      function captureStateSnapshot() {
+        const snapshot = {
+          sequenceIndex: currentSequenceIndex,
+          timestamp: Date.now()
+        };
+        
+        // Additional state data can be added here
+        
+        return snapshot;
+      }
+      
+      /**
+       * Add overlay timing for YouTube video
+       * @param {string} elementId - Element ID
+       * @param {number} startTime - Start time in seconds
+       * @param {number} endTime - End time in seconds
+       * @param {string} animation - Animation type
+       * @return {boolean} Success
+       */
+      function addOverlayTiming(elementId, startTime, endTime, animation = null) {
+        const slide = getCurrentSlide();
+        if (!slide || slide.slideType !== 'youtube') return false;
+        
+        if (!slide.overlayTimings) {
+          slide.overlayTimings = [];
         }
-        setDirty(false);
-    }
-
-    // Project serialization
-    function getProjectJsonString() {
-        return JSON.stringify(currentProject);
-    }
-
-    function loadProjectData(jsonString) {
-        try {
-            const data = JSON.parse(jsonString);
-            if (!validateProjectData(data)) {
-                throw new Error('Invalid project data structure');
-            }
-            
-            currentProject = data;
-            currentSlideId = data.slides[0].slideId;
-            isDirtyFlag = false;
-            sequenceActive = false;
-            currentSequenceIndex = -1;
-            actionHistory = [];
-            
-            notifySubscribers('projectLoaded', data);
-            return true;
-        } catch (error) {
-            console.error('Error loading project data:', error);
-            Utils.showError(`Failed to load project: ${error.message}`);
-            return false;
+        
+        // Check if timing already exists
+        const existingIndex = slide.overlayTimings.findIndex(t => t.elementId === elementId);
+        if (existingIndex !== -1) {
+          // Update existing timing
+          slide.overlayTimings[existingIndex] = {
+            elementId,
+            startTime,
+            endTime,
+            animation
+          };
+        } else {
+          // Add new timing
+          slide.overlayTimings.push({
+            elementId,
+            startTime,
+            endTime,
+            animation
+          });
         }
-    }
-
-    // Data validation
-    function validateProjectData(data) {
-        // Basic structure check
-        if (!data || !Array.isArray(data.slides) || data.slides.length === 0) {
-            return false;
-        }
-
-        // Check each slide has required properties
-        for (const slide of data.slides) {
-            if (!slide.slideId || !Array.isArray(slide.elements) || !Array.isArray(slide.sequence)) {
-                return false;
-            }
-        }
-
+        
         return true;
-    }
-
-    return {
+      }
+      
+      /**
+       * Remove overlay timing
+       * @param {string} elementId - Element ID
+       * @return {boolean} Success
+       */
+      function removeOverlayTiming(elementId) {
+        const slide = getCurrentSlide();
+        if (!slide || slide.slideType !== 'youtube' || !slide.overlayTimings) return false;
+        
+        slide.overlayTimings = slide.overlayTimings.filter(t => t.elementId !== elementId);
+        return true;
+      }
+      
+      /**
+       * Get overlay timings
+       * @return {Array} Overlay timings
+       */
+      function getOverlayTimings() {
+        const slide = getCurrentSlide();
+        if (!slide || slide.slideType !== 'youtube') return [];
+        
+        return slide.overlayTimings || [];
+      }
+      
+      // Public API
+      return {
         init,
-        subscribe,
-        unsubscribe,
+        createNewProject,
+        createSlide,
+        loadProjectData,
+        getProjectJsonString,
+        getCurrentProject,
         getCurrentSlide,
-        getSlides,
-        getCurrentSlideId: () => currentSlideId,
         setCurrentSlideId,
-        addSlide,
-        deleteSlide,
-        updateElementData,
+        updateSlideProperties,
         getElementData,
         addElementData,
+        updateElementData,
         removeElementData,
-        getCurrentSequenceIndex,
-        getCurrentSequence,
-        setCurrentSequenceIndex,
-        startSequence,
-        stopSequence,
-        isSequenceActive,
         getSlideSequence,
         setSlideSequence,
+        getCurrentSequenceIndex,
+        setCurrentSequenceIndex,
+        isSequenceActive,
         addActionToHistory,
+        popActionFromHistory,
         getActionHistory,
-        clearActionHistory,
-        isDirty,
-        setDirty,
-        markAsSaved,
-        getProjectJsonString,
-        loadProjectData,
-        getProjectTitle: () => currentProject?.title || 'Untitled Project',
-        getProjectId: () => currentProject?.projectId,
-        getViewerSettings: () => currentProject?.viewerSettings || { enablePrevNext: true, allowSkip: false, showProgress: true }
-    };
-})();
-</script>
+        captureStateSnapshot,
+        addOverlayTiming,
+        removeOverlayTiming,
+        getOverlayTimings
+      };
+    })();
+    </script>

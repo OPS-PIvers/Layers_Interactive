@@ -1,476 +1,368 @@
 <script>
-const InteractionHandler = (() => {
-    let isViewer = false;
-    let viewerNavContainer;
-    let prevButton, nextButton, stepIndicator;
-
-    function init(mode) {
-        isViewer = (mode === 'viewer');
+    /**
+     * Handles interactive features
+     */
+    const InteractionHandler = (() => {
+      let isViewer = false;
+      let viewerNavContainer = null;
+      let prevButton = null;
+      let nextButton = null;
+      let stepIndicator = null;
+      
+      /**
+       * Initialize interaction handler
+       * @param {string} mode - 'editor' or 'viewer'
+       */
+      function init(mode) {
+        isViewer = mode === 'viewer';
+        
         if (isViewer) {
-            viewerNavContainer = document.getElementById('viewer-navigation');
-            prevButton = document.getElementById('prev-step-button');
-            nextButton = document.getElementById('next-step-button');
-            stepIndicator = document.getElementById('step-indicator');
-            Utils.listen(prevButton, 'click', executePreviousStep);
-            Utils.listen(nextButton, 'click', executeNextStep);
+          // Get navigation elements
+          viewerNavContainer = document.getElementById('viewer-navigation');
+          prevButton = document.getElementById('prev-step-button');
+          nextButton = document.getElementById('next-step-button');
+          stepIndicator = document.getElementById('step-indicator');
+          
+          // Add navigation event listeners
+          if (prevButton) {
+            prevButton.addEventListener('click', handlePrevStep);
+          }
+          
+          if (nextButton) {
+            nextButton.addEventListener('click', handleNextStep);
+          }
         }
-    }
-    
-    // Setup sequence for the current slide
-    function setupSequence() {
+      }
+      
+      /**
+       * Attach listeners to object
+       * @param {fabric.Object} obj - Fabric object
+       */
+      function attachListenersToObject(obj) {
+        if (!obj || !obj.id) return;
+        
+        const data = StateManager.getElementData(obj.id);
+        if (!data || !data.interactions) return;
+        
+        const interactions = data.interactions;
+        
+        // Add click listener
+        if (interactions.triggers && interactions.triggers.onClick) {
+          obj.on('mousedown', (e) => {
+            handleObjectClick(obj, e);
+          });
+          
+          // Change cursor
+          obj.hoverCursor = 'pointer';
+        }
+      }
+      
+      /**
+       * Handle object click
+       * @param {fabric.Object} obj - Clicked object
+       * @param {Event} e - Click event
+       */
+      function handleObjectClick(obj, e) {
+        if (!obj || !obj.id) return;
+        
+        const data = StateManager.getElementData(obj.id);
+        if (!data || !data.interactions) return;
+        
+        const interactions = data.interactions;
+        const features = interactions.features || {};
+        
+        // Capture current state for undo
+        if (isViewer) {
+          const action = {
+            type: 'interaction',
+            elementId: obj.id,
+            preStateSnapshot: StateManager.captureStateSnapshot()
+          };
+          
+          StateManager.addActionToHistory(action);
+        }
+        
+        // Handle quiz
+        if (features.quiz && features.quiz.enabled) {
+          QuizPlayer.openQuiz(obj);
+          return;
+        }
+        
+        // Handle reveal
+        if (features.reveal && features.reveal.enabled) {
+          handleReveal(features.reveal.targetIds);
+        }
+        
+        // Handle spotlight
+        if (features.spotlight && features.spotlight.enabled) {
+          handleSpotlight(obj, features.spotlight);
+        }
+        
+        // Handle pan and zoom
+        if (features.panAndZoom && features.panAndZoom.enabled) {
+          handlePanAndZoom(features.panAndZoom);
+        }
+        
+        // Handle animation trigger
+        if (data.style && data.style.animation && data.style.animation.enabled && data.style.animation.trigger === 'onClick') {
+          AnimationController.triggerAnimation(obj, 'onClick');
+        }
+        
+        // Update sequence if in viewer mode
+        if (isViewer) {
+          const sequence = StateManager.getSlideSequence();
+          const elementIndex = sequence.indexOf(obj.id);
+          
+          if (elementIndex !== -1) {
+            StateManager.setCurrentSequenceIndex(elementIndex);
+            updateNavUI();
+          }
+        }
+      }
+      
+      /**
+       * Handle reveal interaction
+       * @param {Array} targetIds - IDs of elements to reveal
+       */
+      function handleReveal(targetIds) {
+        if (!targetIds || !targetIds.length) return;
+        
+        // Show target elements
+        CanvasController.setElementsVisibility(targetIds, true);
+      }
+      
+      /**
+       * Handle spotlight interaction
+       * @param {fabric.Object} obj - Spotlight center object
+       * @param {Object} options - Spotlight options
+       */
+      function handleSpotlight(obj, options) {
+        if (!obj || !obj.canvas) return;
+        
+        // Get canvas
+        const canvas = obj.canvas;
+        
+        // TODO: Implement spotlight effect (dimming other elements)
+        // This is a placeholder for spotlight effect
+        console.log('Spotlight effect triggered for', obj.id);
+      }
+      
+      /**
+       * Handle pan and zoom interaction
+       * @param {Object} options - Pan and zoom options
+       */
+      function handlePanAndZoom(options) {
+        if (!options) return;
+        
+        const canvas = CanvasController.getCanvas();
+        if (!canvas) return;
+        
+        // Get target position
+        const targetX = options.targetX || 0;
+        const targetY = options.targetY || 0;
+        const targetZoom = options.targetZoom || 1.5;
+        
+        // Animate view transformation
+        const currentViewport = canvas.viewportTransform.slice();
+        const targetViewport = [
+          targetZoom, 0, 0, targetZoom,
+          -targetX * targetZoom + canvas.width / 2,
+          -targetY * targetZoom + canvas.height / 2
+        ];
+        
+        // Animate transformation using Fabric's animation utility
+        fabric.util.animate({
+          startValue: 0,
+          endValue: 1,
+          duration: 1000,
+          onChange: (value) => {
+            const newTransform = currentViewport.map((start, i) => {
+              return start + (targetViewport[i] - start) * value;
+            });
+            
+            canvas.setViewportTransform(newTransform);
+          },
+          onComplete: () => {
+            canvas.setViewportTransform(targetViewport);
+            canvas.renderAll();
+          }
+        });
+      }
+      
+      /**
+       * Handle prev step button click
+       */
+      function handlePrevStep() {
         if (!isViewer) return;
         
-        console.log("Setting up interaction sequence");
-        applyInitialSequenceState();
+        // Get current sequence index
+        const currentIndex = StateManager.getCurrentSequenceIndex();
         
-        // Check if we have a sequence on this slide
+        // Pop last action from history
+        const lastAction = StateManager.popActionFromHistory();
+        if (!lastAction) return;
+        
+        // Restore previous state
+        if (lastAction.preStateSnapshot) {
+          // Restore viewport transform if available
+          if (lastAction.preStateSnapshot.viewportTransform) {
+            CanvasController.setViewportTransform(lastAction.preStateSnapshot.viewportTransform);
+          }
+          
+          // Restore element visibility
+          if (lastAction.preStateSnapshot.elementVisibility) {
+            for (const [id, visible] of Object.entries(lastAction.preStateSnapshot.elementVisibility)) {
+              const obj = CanvasController.getObjectById(id);
+              if (obj) {
+                obj.visible = visible;
+              }
+            }
+          }
+          
+          // Update canvas
+          CanvasController.getCanvas().renderAll();
+        }
+        
+        // Update sequence index
+        if (currentIndex > 0) {
+          StateManager.setCurrentSequenceIndex(currentIndex - 1);
+        } else {
+          StateManager.setCurrentSequenceIndex(-1);
+        }
+        
+        // Update navigation UI
+        updateNavUI();
+      }
+      
+      /**
+       * Handle next step button click
+       */
+      function handleNextStep() {
+        if (!isViewer) return;
+        
+        // Get current sequence index
+        const currentIndex = StateManager.getCurrentSequenceIndex();
+        const sequence = StateManager.getSlideSequence();
+        
+        // If at end of sequence, do nothing
+        if (currentIndex >= sequence.length - 1) return;
+        
+        // Move to next step
+        const nextIndex = currentIndex + 1;
+        const nextElementId = sequence[nextIndex];
+        
+        // Trigger element click
+        const nextElement = CanvasController.getObjectById(nextElementId);
+        if (nextElement) {
+          handleObjectClick(nextElement);
+        }
+        
+        // Update sequence index
+        StateManager.setCurrentSequenceIndex(nextIndex);
+        
+        // Update navigation UI
+        updateNavUI();
+      }
+      
+      /**
+       * Advance to next sequence step
+       * Used by QuizPlayer to continue sequence after quiz
+       */
+      function advanceSequence() {
+        if (!isViewer) return;
+        
+        handleNextStep();
+      }
+      
+      /**
+       * Apply initial sequence state
+       * Shows/hides elements based on sequence
+       */
+      function applyInitialSequenceState() {
+        if (!isViewer) return;
+        
         const slide = StateManager.getCurrentSlide();
-        const sequence = slide?.sequence || [];
+        if (!slide) return;
         
-        if (sequence.length > 0) {
-            console.log(`Sequence found with ${sequence.length} steps`);
-            // Update UI and start the sequence
-            updateNavUI();
-        } else {
-            console.log("No sequence found for this slide");
-        }
-    }
-
-    function attachListenersToObject(fabricObject) {
-        if (!fabricObject) return;
-        const data = fabricObject.appData; // Data from StateManager
-
-        // Remove previous listeners to prevent duplicates if re-attaching
-        fabricObject.off('mousedown');
-        fabricObject.off('mouseover');
-        fabricObject.off('mouseout');
-
-        // Add listener based on trigger config
-        if (data?.interactions?.triggers?.onClick) {
-            fabricObject.on('mousedown', () => handleInteractionTrigger(fabricObject));
-        }
-        // Add hover effects or listeners if needed later
-        // if (data?.interactions?.triggers?.onHover) { ... }
-
-        // Set cursor style (only really matters in viewer)
-        if (!isViewer) {
-            fabricObject.hoverCursor = 'move'; // Default editor cursor
-        } else {
-            // Set pointer cursor only if there's an interaction defined
-            const hasInteraction = Object.values(data?.interactions?.features || {}).some(f => f.enabled);
-            fabricObject.hoverCursor = hasInteraction ? 'pointer' : 'default';
-        }
-    }
-
-    function handleInteractionTrigger(fabricObject) {
-        const elementData = fabricObject.appData;
-        if (!elementData || !elementData.interactions) return;
-
-        console.log(`Interaction triggered by: ${elementData.nickname || elementData.id}`);
-
-        // --- Viewer Sequence Logic ---
-        if (isViewer && StateManager.isSequenceActive()) {
-            // If click happens during sequence, only proceed if it's the *current* sequence item
-            const currentSequenceIndex = StateManager.getCurrentSequenceIndex();
-            const sequence = StateManager.getSlideSequence();
-            if (sequence[currentSequenceIndex] !== elementData.id) {
-                console.log("Clicked element is not the current sequence item. Ignoring.");
-                // Optional: provide visual feedback that it's not the right item?
-                 // Simple visual cue: quick flash/shake
-                flashElement(fabricObject, '#EA4335'); // Flash red
-                return; // Don't proceed
+        // Get elements and sequence
+        const elements = slide.elements || [];
+        const sequence = slide.sequence || [];
+        
+        // Hide elements that should be initially hidden
+        elements.forEach(element => {
+          if (element.initiallyHidden) {
+            const obj = CanvasController.getObjectById(element.id);
+            if (obj) {
+              obj.visible = false;
             }
-             // If it *is* the current item, execute its action and advance
-             executeActionForElement(elementData, fabricObject, true); // true = advance sequence after action
-
-        } else if (isViewer && !StateManager.isSequenceActive()) {
-            // Sequence not active, just perform the action directly without advancing
-             executeActionForElement(elementData, fabricObject, false); // false = do not advance sequence
-
-        } else if (!isViewer) {
-             // In Editor mode, clicking might select or trigger a preview?
-             // For now, editor click is handled by canvas selection.
-             console.log("Interaction triggered in Editor mode (no action performed).");
+          }
+        });
+        
+        // Set initial sequence index
+        StateManager.setCurrentSequenceIndex(-1);
+        
+        // Show navigation if we have a sequence
+        if (sequence.length > 0 && viewerNavContainer) {
+          viewerNavContainer.style.display = 'flex';
+        } else if (viewerNavContainer) {
+          viewerNavContainer.style.display = 'none';
         }
-    }
-
-
-    function executeActionForElement(elementData, fabricObject, advanceSequence) {
-         const features = elementData.interactions?.features || {};
-         let actionCompleted = false; // Flag to track if any action was actually performed
-
-        // Store state *before* performing action (for potential undo)
-        const preActionState = captureStateSnapshot(elementData.id); // Capture state relevant to this element/viewport
-
-
-        // --- Execute Enabled Features ---
-        // Order might matter if multiple features are enabled (e.g., zoom then reveal)
-
-         // 1. Pan & Zoom
-         if (features.panAndZoom?.enabled) {
-             actionCompleted = true;
-             console.log("Executing Pan & Zoom");
-             const target = features.panAndZoom;
-             const targetVp = calculateTargetViewport(target.targetX, target.targetY, target.targetZoom);
-             CanvasController.animateViewport(targetVp, 500, () => {
-                 console.log("Pan & Zoom animation complete.");
-                  if (advanceSequence) { advanceSequenceAfterAction(elementData.id, 'panAndZoom', preActionState); }
-             });
-             // Note: If other actions need to happen *after* zoom, the callback structure gets complex.
-             // For now, assume other actions happen concurrently or immediately after *initiating* the zoom.
-         }
-
-        // 2. Reveal / Hide
-        if (features.reveal?.enabled && features.reveal.targetIds?.length > 0) {
-            actionCompleted = true;
-            console.log("Executing Reveal/Hide for targets:", features.reveal.targetIds);
-            features.reveal.targetIds.forEach(targetId => {
-                const targetObj = CanvasController.getObjectById(targetId);
-                if (targetObj) {
-                     // Toggle visibility or use specific animation? Let's toggle for now.
-                     targetObj.visible = !targetObj.visible;
-                     // TODO: Add animation (fadeIn/fadeOut) based on reveal config
-                }
-            });
-            CanvasController.getCanvas().requestRenderAll();
+        
+        // Initialize YouTube if needed
+        if (slide.slideType === 'youtube' && slide.youtubeVideoId) {
+          YouTubeManager.initializePlayer('youtube-container', slide.youtubeVideoId);
+          
+          if (slide.overlayTimings) {
+            YouTubeManager.setOverlayTimings(slide.overlayTimings);
+          }
         }
-
-         // 3. Spotlight (Needs implementation - overlay?)
-         if (features.spotlight?.enabled) {
-              actionCompleted = true;
-              console.warn("Spotlight feature execution not implemented.");
-              // Logic: Create a semi-transparent overlay covering the canvas,
-              // then "cut out" a shape (circle/rect) around the fabricObject.
-              // This is complex and might require adding/removing temporary canvas objects.
-         }
-
-         // 4. Quiz
-         if (features.quiz?.enabled) {
-              actionCompleted = true;
-              console.log("Executing Quiz");
-              // Open the quiz player modal.
-              // The QuizPlayer module will handle its own lifecycle and
-              // will call back to advance the sequence when the quiz is finished.
-              QuizPlayer.openQuiz(fabricObject, () => {
-                  // This callback is executed when the quiz is fully completed and closed.
-                  console.log("Quiz finished callback.");
-                  if (advanceSequence) { advanceSequenceAfterAction(elementData.id, 'quiz', preActionState); }
-              });
-              // IMPORTANT: Sequence advance happens *inside* the QuizPlayer callback now.
-              // We should not call advanceSequenceAfterAction immediately here for quizzes.
-              return; // Stop further execution flow here for quiz, let the callback handle it.
-         }
-
-         // If any non-async action was completed and sequence needs advancing
-         if (actionCompleted && advanceSequence && !features.panAndZoom?.enabled && !features.quiz?.enabled) {
-             advanceSequenceAfterAction(elementData.id, 'other', preActionState);
-         } else if (!actionCompleted) {
-              console.log("Triggered element has no enabled features.");
-              // Still advance sequence if it was the correct item, even if it does nothing?
-              // This seems correct - clicking the right item moves forward.
-               if (advanceSequence) { advanceSequenceAfterAction(elementData.id, 'no_op', preActionState); }
-         }
-    }
-
-    // --- Sequence Navigation (Viewer Only) ---
-
-    function applyInitialSequenceState() {
-         if (!isViewer) return;
-         const slide = StateManager.getCurrentSlide();
-         const settings = StateManager.getViewerSettings();
-         const sequence = slide?.sequence || [];
-
-         if (settings.enablePrevNext && sequence.length > 0) {
-             viewerNavContainer.style.display = 'flex';
-             StateManager.startSequence(); // Set index to 0
-             // Make all sequence items initially visible? Or apply initial visibility?
-             // Let's assume elements marked 'initiallyHidden' ARE hidden,
-             // and the sequence reveals them or interacts with them.
-             // Hide all elements *in the sequence* initially? Or respect initiallyHidden?
-             // Let's respect 'initiallyHidden'. The sequence steps will make them visible if needed.
-
-             // Highlight the first item? (Optional)
-             // highlightSequenceItem(sequence[0]);
-
-         } else {
-             viewerNavContainer.style.display = 'none';
-             StateManager.setCurrentSequenceIndex(-1); // Ensure sequence is inactive
-         }
-         updateNavUI();
-    }
-
-    function advanceSequenceAfterAction(elementId, actionType, preActionState) {
-         if (!isViewer || !StateManager.isSequenceActive()) return;
-
-         const currentSequenceIndex = StateManager.getCurrentSequenceIndex();
-         const sequence = StateManager.getSlideSequence();
-
-         // Record the action taken for potential undo
-         // The action recorded is *triggering* the element at the current index
-         const actionRecord = {
-            index: currentSequenceIndex,
-            elementId: elementId,
-            actionType: actionType, // 'panAndZoom', 'reveal', 'quiz', 'other', 'no_op'
-            preStateSnapshot: preActionState // State before *this* action occurred
-         };
-         StateManager.addActionToHistory(actionRecord);
-         console.log("Action recorded:", actionRecord);
-
-
-         // Move to the next step
-         const nextIndex = currentSequenceIndex + 1;
-         if (nextIndex < sequence.length) {
-             StateManager.setCurrentSequenceIndex(nextIndex);
-             console.log("Advanced sequence to index:", nextIndex);
-             // Optional: Automatically trigger the next action? Or wait for user click?
-             // Current design implies user clicks the next item.
-             // Optional: Highlight next item
-             // highlightSequenceItem(sequence[nextIndex]);
-         } else {
-             console.log("End of sequence reached.");
-             StateManager.setCurrentSequenceIndex(nextIndex); // Move index past the end
-             // Optional: Show completion message?
-         }
-         updateNavUI();
-    }
-
-    function executeNextStep() {
+        
+        // Update navigation UI
+        updateNavUI();
+        
+        // Render canvas
+        CanvasController.getCanvas().renderAll();
+      }
+      
+      /**
+       * Update navigation UI
+       */
+      function updateNavUI() {
+        if (!isViewer || !viewerNavContainer) return;
+        
+        // Skip if navigation is hidden
+        if (viewerNavContainer.style.display === 'none') return;
+        
         const currentIndex = StateManager.getCurrentSequenceIndex();
-        const totalSteps = StateManager.getCurrentSequence().length;
-        if (currentIndex >= totalSteps - 1) return;
-
-        // Get history from StateManager instead of using undefined variable
-        const actionHistory = StateManager.getActionHistory();
-        const nextSnapshot = actionHistory[currentIndex + 1];
-        if (nextSnapshot) {
-            if (restoreFromSnapshot(nextSnapshot.preStateSnapshot)) {
-                StateManager.setCurrentSequenceIndex(currentIndex + 1);
-                updateNavUI();
-            }
-        }
-    }
-
-    function executePreviousStep() {
-        const currentIndex = StateManager.getCurrentSequenceIndex();
-        if (currentIndex <= 0) return;
-
-        // Get history from StateManager instead of using undefined variable
-        const actionHistory = StateManager.getActionHistory();
-        const previousSnapshot = actionHistory[currentIndex - 1];
-        if (previousSnapshot) {
-            if (restoreFromSnapshot(previousSnapshot.preStateSnapshot)) {
-                StateManager.setCurrentSequenceIndex(currentIndex - 1);
-                updateNavUI();
-            }
-        }
-    }
-
-    function updateNavUI() {
-        const sequence = StateManager.getCurrentSequence();
-        const totalSteps = sequence.length;
-        const currentIndex = StateManager.getCurrentSequenceIndex();
+        const sequence = StateManager.getSlideSequence();
+        const historyLength = StateManager.getActionHistory().length;
         
-        // Show step as 1-based for better UX, but handle special cases
-        const currentStepDisplay = currentIndex < 0 ? 0 : currentIndex + 1;
-        
-        const stepIndicator = document.getElementById('step-indicator');
-        if (stepIndicator) {
-            if (totalSteps === 0) {
-                stepIndicator.textContent = 'No steps available';
-            } else if (currentIndex >= totalSteps) {
-                stepIndicator.textContent = `Complete! (${totalSteps} steps)`;
-            } else {
-                stepIndicator.textContent = `Step ${currentStepDisplay} of ${totalSteps}`;
-            }
-        }
-
-        // Update navigation buttons state - fix IDs to match Viewer.html
-        const prevButton = document.getElementById('prev-step-button');
-        const nextButton = document.getElementById('next-step-button');
-        
+        // Update previous button
         if (prevButton) {
-            prevButton.disabled = currentStepDisplay <= 1;
+          prevButton.disabled = historyLength === 0;
         }
         
+        // Update next button
         if (nextButton) {
-            nextButton.disabled = currentIndex >= totalSteps - 1;
-            // Update next button text based on state
-            nextButton.textContent = currentIndex >= totalSteps - 1 ? 'Complete' : 'Next';
+          nextButton.disabled = currentIndex >= sequence.length - 1;
         }
         
-        // Highlight current step in sequence if available
-        highlightCurrentStep(sequence[currentIndex]);
-    }
-
-    function highlightCurrentStep(currentElementId) {
-        // Remove highlight from all elements
-        CanvasController.getCanvas().getObjects().forEach(obj => {
-            if (obj.stroke === '#FBBC05') { // Remove previous highlight
-                obj.set({
-                    stroke: obj.originalStroke || null,
-                    strokeWidth: obj.originalStrokeWidth || 0
-                });
-            }
-        });
-        
-        // Add highlight to current element
-        if (currentElementId) {
-            const currentObj = CanvasController.getObjectById(currentElementId);
-            if (currentObj) {
-                // Store original stroke properties
-                currentObj.originalStroke = currentObj.stroke;
-                currentObj.originalStrokeWidth = currentObj.strokeWidth;
-                
-                // Apply highlight
-                currentObj.set({
-                    stroke: '#FBBC05',
-                    strokeWidth: 2
-                });
-            }
+        // Update step indicator
+        if (stepIndicator) {
+          stepIndicator.textContent = `Step ${currentIndex + 1} of ${sequence.length}`;
         }
-        
-        CanvasController.getCanvas().requestRenderAll();
-    }
-
-    // --- Helper Functions ---
-
-    function flashElement(fabricObject, color = '#FBBC05', duration = 300) {
-        if (!fabricObject) return;
-        const originalFill = fabricObject.fill;
-        const originalStroke = fabricObject.stroke;
-        // Apply flash style
-        fabricObject.set({
-            fill: color, // Flash with specified color
-            // Or flash stroke?
-            // stroke: color,
-            // strokeWidth: (fabricObject.strokeWidth || 0) + 2
-        });
-        CanvasController.getCanvas().requestRenderAll();
-        // Revert after duration
-        setTimeout(() => {
-            fabricObject.set({
-                fill: originalFill,
-                // stroke: originalStroke,
-                // strokeWidth: fabricObject.strokeWidth ? fabricObject.strokeWidth - 2 : 0
-            });
-             CanvasController.getCanvas().requestRenderAll();
-        }, duration);
-    }
-
-    function calculateTargetViewport(targetX, targetY, targetZoom) {
-        // This needs refinement. How are targetX/Y defined?
-        // Are they center points in original image coords? Canvas coords?
-        // Assuming they are canvas coordinates for the desired center point.
-        const canvas = CanvasController.getCanvas();
-        const width = canvas.width;
-        const height = canvas.height;
-
-        // Calculate the translation needed to center targetX/Y in the viewport at the new zoom level
-        const newTranslateX = width / 2 - targetX * targetZoom;
-        const newTranslateY = height / 2 - targetY * targetZoom;
-
-        return [targetZoom, 0, 0, targetZoom, newTranslateX, newTranslateY];
-    }
-
-     // Function to capture relevant state before an action
-    function captureStateSnapshot(triggerElementId) {
-        const snapshot = {
-            sequenceIndex: StateManager.getCurrentSequenceIndex(),
-            timestamp: Date.now(),
-            triggerElementId,
-            viewportTransform: [...CanvasController.getViewportTransform()],
-            elements: {}
-        };
-
-        // Capture complete element states
-        const slide = StateManager.getCurrentSlide();
-        if (slide && slide.elements) {
-            slide.elements.forEach(element => {
-                const fabricObj = CanvasController.getObjectById(element.id);
-                if (fabricObj) {
-                    snapshot.elements[element.id] = {
-                        visible: fabricObj.visible,
-                        opacity: fabricObj.opacity,
-                        position: {
-                            left: fabricObj.left,
-                            top: fabricObj.top
-                        },
-                        transform: {
-                            angle: fabricObj.angle,
-                            scaleX: fabricObj.scaleX,
-                            scaleY: fabricObj.scaleY
-                        },
-                        style: { ...element.style },
-                        dimensions: {
-                            width: fabricObj.width,
-                            height: fabricObj.height
-                        }
-                    };
-                }
-            });
-        }
-        
-        return snapshot;
-    }
-
-    function restoreFromSnapshot(snapshot) {
-        if (!snapshot) return false;
-
-        try {
-            // Restore viewport first
-            if (snapshot.viewportTransform) {
-                CanvasController.setViewportTransform(snapshot.viewportTransform);
-            }
-
-            // Restore element states
-            Object.entries(snapshot.elements).forEach(([elementId, elementState]) => {
-                const fabricObj = CanvasController.getObjectById(elementId);
-                if (fabricObj) {
-                    // Apply all saved properties
-                    fabricObj.set({
-                        visible: elementState.visible,
-                        opacity: elementState.opacity,
-                        left: elementState.position.left,
-                        top: elementState.position.top,
-                        angle: elementState.transform.angle,
-                        scaleX: elementState.transform.scaleX,
-                        scaleY: elementState.transform.scaleY,
-                        width: elementState.dimensions.width,
-                        height: elementState.dimensions.height
-                    });
-
-                    // Apply style properties if they exist
-                    if (elementState.style) {
-                        const elementData = StateManager.getElementData(elementId);
-                        if (elementData) {
-                            elementData.style = { ...elementState.style };
-                            StateManager.updateElementData(elementId, elementData);
-                        }
-                    }
-                }
-            });
-
-            // Update UI
-            CanvasController.getCanvas().requestRenderAll();
-            updateNavUI();
-            return true;
-        } catch (error) {
-            console.error('Error restoring state:', error);
-            return false;
-        }
-    }
-
-    // --- Public API ---
-    return {
+      }
+      
+      // Public API
+      return {
         init,
         attachListenersToObject,
-        handleInteractionTrigger, // Might be called directly? (e.g. from next button)
-        applyInitialSequenceState, // Called by main.js or stateManager on load
-        updateNavUI, // Called by StateManager when index changes
-        executeNextStep, // Called by nav button
-        executePreviousStep, // Called by nav button
-        setupSequence // Added setupSequence to the public API
-    };
-
-})();
-</script>
+        handleObjectClick,
+        handlePrevStep,
+        handleNextStep,
+        advanceSequence,
+        applyInitialSequenceState,
+        updateNavUI
+      };
+    })();
+    </script>

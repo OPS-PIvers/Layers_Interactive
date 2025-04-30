@@ -1,91 +1,120 @@
 <script>
-const ServerClient = (() => {
-
-  function runAsync(functionName, ...args) {
-    return new Promise((resolve, reject) => {
-      try {
+  /**
+   * Client for server-side API calls
+   */
+  const ServerClient = (() => {
+    /**
+     * Run a server function asynchronously
+     * @param {string} functionName - Server function name
+     * @param {...*} args - Function arguments
+     * @return {Promise} Promise resolving to function result
+     */
+    function runAsync(functionName, ...args) {
+      return new Promise((resolve, reject) => {
+        Utils.showLoadingIndicator(true, `Processing ${functionName}...`);
+        
         google.script.run
-          .withSuccessHandler(resolve)
+          .withSuccessHandler(result => {
+            Utils.showLoadingIndicator(false);
+            resolve(result);
+          })
           .withFailureHandler(error => {
-             console.error(`Server call failed for ${functionName}:`, error);
-             // Try to extract a meaningful message
-             const message = error.message || 
-                            (typeof error === 'string' ? error : 'An unknown server error occurred.');
-             reject(new Error(message)); // Reject with an Error object
+            Utils.showLoadingIndicator(false);
+            console.error(`Error in ${functionName}:`, error);
+            reject(error);
           })
           [functionName](...args);
-      } catch (error) {
-        console.error(`Error calling server function ${functionName}:`, error);
-        reject(new Error(`Failed to call server function: ${error.message}`));
-      }
-    });
-  }
-
-  return {
-    saveProject(projectJsonString, projectId, title) {
-      if (!projectJsonString) {
-        return Promise.reject(new Error("Project data cannot be empty"));
-      }
-      
-      Utils.showLoadingIndicator(true, 'Saving Project...');
-      return runAsync('saveProjectData', projectJsonString, projectId, title)
-          .finally(() => Utils.showLoadingIndicator(false));
-    },
-    
-    loadProject(projectId) {
-      if (!projectId || typeof projectId !== 'string') {
-        return Promise.reject(new Error("Invalid project ID"));
-      }
-      
-      Utils.showLoadingIndicator(true, 'Loading Project...');
-      return runAsync('loadProjectData', projectId)
-          .finally(() => Utils.showLoadingIndicator(false));
-    },
-    
-    listProjects() {
-        Utils.showLoadingIndicator(true, 'Loading Project List...');
-        return runAsync('listProjects')
-            .finally(() => Utils.showLoadingIndicator(false));
-    },
-    
-    uploadImage(dataUrl, filename) {
-      if (!dataUrl || !dataUrl.startsWith('data:image')) {
-        return Promise.reject(new Error("Invalid image data"));
-      }
-      
-      Utils.showLoadingIndicator(true, 'Uploading Image...');
-      return runAsync('saveImageFile', dataUrl, filename)
-          .finally(() => Utils.showLoadingIndicator(false));
-    },
-    
-    loadImage(fileId) {
-      if (!fileId) {
-        return Promise.reject(new Error("Invalid file ID"));
-      }
-      
-      // Don't show loading for this as it's often background
-      return runAsync('getImageDataUrl', fileId);
-    },
-    
-    sendQuizToUser(resultsPayload, userEmail) {
-      if (!resultsPayload || !userEmail) {
-        return Promise.reject(new Error("Missing required parameters"));
-      }
-      
-      Utils.showLoadingIndicator(true, 'Sending Results...');
-      return runAsync('sendQuizResultsToUser', resultsPayload, userEmail)
-          .finally(() => Utils.showLoadingIndicator(false));
-    },
-    
-    sendQuizToCreator(resultsPayload, creatorEmail) {
-      if (!resultsPayload || !creatorEmail) {
-        return Promise.reject(new Error("Missing required parameters"));
-      }
-      
-      Utils.showLoadingIndicator(true, 'Sending Results...');
-      return runAsync('sendQuizResultsToCreator', resultsPayload, creatorEmail)
-          .finally(() => Utils.showLoadingIndicator(false));
+      });
     }
-  };
-})();
-</script>
+    
+    /**
+     * Save project data
+     * @param {string} jsonString - Project data as JSON string
+     * @param {string} projectId - Project ID (if updating)
+     * @param {string} title - Project title
+     * @return {Promise} Promise resolving to save result
+     */
+    function saveProject(jsonString, projectId, title) {
+      return runAsync('saveProjectData', jsonString, projectId, title);
+    }
+    
+    /**
+     * Load project data
+     * @param {string} projectId - Project ID
+     * @return {Promise} Promise resolving to project JSON string
+     */
+    function loadProject(projectId) {
+      return runAsync('loadProjectData', projectId);
+    }
+    
+    /**
+     * Upload an image
+     * @param {string} dataUrl - Image data URL
+     * @param {string} filename - Image filename
+     * @return {Promise} Promise resolving to upload result
+     */
+    function uploadImage(dataUrl, filename) {
+      return runAsync('saveImageFile', dataUrl, filename);
+    }
+    
+    /**
+     * Load an image
+     * @param {string} fileId - Image file ID
+     * @return {Promise} Promise resolving to image data URL
+     */
+    function loadImage(fileId) {
+      return runAsync('getImageDataUrl', fileId);
+    }
+    
+    /**
+     * Upload an audio file
+     * @param {string} dataUrl - Audio data URL
+     * @param {string} filename - Audio filename
+     * @return {Promise} Promise resolving to upload result
+     */
+    function uploadAudio(dataUrl, filename) {
+      return runAsync('saveAudioFile', dataUrl, filename);
+    }
+    
+    /**
+     * Load an audio file
+     * @param {string} fileId - Audio file ID
+     * @return {Promise} Promise resolving to audio data URL
+     */
+    function loadAudio(fileId) {
+      return runAsync('getAudioDataUrl', fileId);
+    }
+    
+    /**
+     * Send quiz results to user
+     * @param {Object} results - Quiz results
+     * @param {string} userEmail - User email
+     * @return {Promise} Promise resolving to send result
+     */
+    function sendQuizToUser(results, userEmail) {
+      return runAsync('sendQuizResultsToUser', results, userEmail);
+    }
+    
+    /**
+     * Send quiz results to creator
+     * @param {Object} results - Quiz results
+     * @param {string} creatorEmail - Creator email
+     * @return {Promise} Promise resolving to send result
+     */
+    function sendQuizToCreator(results, creatorEmail) {
+      return runAsync('sendQuizResultsToCreator', results, creatorEmail);
+    }
+    
+    // Public API
+    return {
+      saveProject,
+      loadProject,
+      uploadImage,
+      loadImage,
+      uploadAudio,
+      loadAudio,
+      sendQuizToUser,
+      sendQuizToCreator
+    };
+  })();
+  </script>

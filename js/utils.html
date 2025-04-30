@@ -1,220 +1,191 @@
 <script>
-const Utils = (() => {
-    let domRefs = {};
-    let errorTimeout;
-    let loadingCount = 0;
-
-    function init() {
-        ensureDOMReferences();
-        setupGlobalErrorHandling();
-    }
-
-    function ensureDOMReferences() {
-        const required = {
-            loadingIndicator: 'loading-indicator',
-            loadingText: 'loading-text',
-            errorMessage: 'error-message',
-            errorText: 'error-text'
-        };
-
-        const missing = [];
-        domRefs = {};
-
-        for (const [key, id] of Object.entries(required)) {
-            const element = document.getElementById(id);
-            if (!element) {
-                missing.push(id);
-            } else {
-                domRefs[key] = element;
-            }
-        }
-
-        if (missing.length > 0) {
-            console.error(`Missing required UI elements: ${missing.join(', ')}`);
-            // Create fallback elements if they don't exist
-            createFallbackElements(missing);
-        }
-    }
-
-    function createFallbackElements(missingIds) {
-        // Create a container for fallback elements if needed
-        let fallbackContainer = document.getElementById('utils-fallback-container');
-        if (!fallbackContainer) {
-            fallbackContainer = document.createElement('div');
-            fallbackContainer.id = 'utils-fallback-container';
-            fallbackContainer.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 9999;';
-            document.body.appendChild(fallbackContainer);
-        }
-
-        missingIds.forEach(id => {
-            const element = document.createElement('div');
-            element.id = id;
-            element.style.display = 'none';
-            
-            switch (id) {
-                case 'loading-indicator':
-                    element.innerHTML = `
-                        <div style="background: rgba(0,0,0,0.8); color: white; padding: 10px; border-radius: 5px;">
-                            <span id="loading-text">Loading...</span>
-                        </div>`;
-                    break;
-                case 'error-message':
-                    element.innerHTML = `
-                        <div style="background: #EA4335; color: white; padding: 10px; border-radius: 5px; margin-top: 5px;">
-                            <span id="error-text"></span>
-                        </div>`;
-                    break;
-            }
-            
-            fallbackContainer.appendChild(element);
-            domRefs[id === 'loading-indicator' ? 'loadingIndicator' : 'errorMessage'] = element;
-            if (id === 'loading-indicator') {
-                domRefs.loadingText = element.querySelector('#loading-text');
-            } else if (id === 'error-message') {
-                domRefs.errorText = element.querySelector('#error-text');
-            }
-        });
-    }
-
-    function setupGlobalErrorHandling() {
-        window.onerror = function(msg, url, line, col, error) {
-            console.error('Global error:', {msg, url, line, col, error});
-            showError(`An error occurred: ${msg}`);
-            return false; // Let default handler run
-        };
-
-        window.addEventListener('unhandledrejection', function(event) {
-            console.error('Unhandled promise rejection:', event.reason);
-            showError(`Promise error: ${event.reason?.message || 'Unknown error'}`);
-        });
-    }
-
-    function showError(message, duration = 5000) {
-        if (!domRefs.errorMessage || !domRefs.errorText) {
-            console.error('Error display elements not available');
-            alert(message); // Fallback to alert if elements don't exist
-            return;
-        }
-
-        clearTimeout(errorTimeout);
-        domRefs.errorText.textContent = message;
-        domRefs.errorMessage.style.display = 'block';
+    /**
+     * Utility functions for the application
+     */
+    const Utils = (() => {
+      let messageTimeout = null;
+      
+      /**
+       * Show loading indicator
+       * @param {boolean} show - Whether to show or hide
+       * @param {string} message - Optional message
+       */
+      function showLoadingIndicator(show, message = 'Loading...') {
+        const loadingElement = document.getElementById('loading-indicator');
+        if (!loadingElement) return;
         
-        // Auto-hide after duration
-        errorTimeout = setTimeout(() => {
-            domRefs.errorMessage.style.display = 'none';
-        }, duration);
-    }
-
-    function showLoadingIndicator(show = true, message = 'Loading...') {
-        if (!domRefs.loadingIndicator || !domRefs.loadingText) {
-            console.warn('Loading indicator elements not available');
-            return;
+        loadingElement.innerHTML = show ? message : '';
+        loadingElement.style.display = show ? 'flex' : 'none';
+      }
+      
+      /**
+       * Show error message
+       * @param {string} message - Error message
+       * @param {number} duration - Auto-hide duration in ms
+       */
+      function showError(message, duration = 0) {
+        showMessage(message, 'error', duration);
+      }
+      
+      /**
+       * Show success message
+       * @param {string} message - Success message
+       * @param {number} duration - Auto-hide duration in ms
+       */
+      function showSuccess(message, duration = 3000) {
+        showMessage(message, 'success', duration);
+      }
+      
+      /**
+       * Show message
+       * @param {string} message - Message text
+       * @param {string} type - Message type: 'info', 'success', 'warning', 'error'
+       * @param {number} duration - Auto-hide duration in ms
+       */
+      function showMessage(message, type = 'info', duration = 0) {
+        const messageElement = document.getElementById('message-modal');
+        if (!messageElement) return;
+        
+        // Clear any existing timeout
+        if (messageTimeout) {
+          clearTimeout(messageTimeout);
+          messageTimeout = null;
         }
-
-        if (show) {
-            loadingCount++;
-            domRefs.loadingText.textContent = message;
-            domRefs.loadingIndicator.style.display = 'block';
-        } else {
-            loadingCount = Math.max(0, loadingCount - 1);
-            if (loadingCount === 0) {
-                domRefs.loadingIndicator.style.display = 'none';
-            }
+        
+        // Set message content
+        messageElement.innerHTML = `
+          <div class="modal-content message-${type}">
+            <div class="message-icon">${getMessageIcon(type)}</div>
+            <div class="message-text">${message}</div>
+            <button class="close-message">×</button>
+          </div>
+        `;
+        
+        // Show message
+        messageElement.style.display = 'flex';
+        
+        // Add close handler
+        const closeButton = messageElement.querySelector('.close-message');
+        if (closeButton) {
+          closeButton.addEventListener('click', () => {
+            messageElement.style.display = 'none';
+          });
         }
-    }
-
-    // Safe event listener attachment with error handling
-    function listen(target, event, handler) {
-        try {
-            const element = typeof target === 'string' ? document.querySelector(target) : target;
-            if (!element) {
-                console.warn(`Target element not found: ${target}`);
-                return false;
-            }
-            element.addEventListener(event, handler);
-            return true;
-        } catch (error) {
-            console.error(`Error attaching event listener:`, error);
-            return false;
+        
+        // Auto-hide if duration > 0
+        if (duration > 0) {
+          messageTimeout = setTimeout(() => {
+            messageElement.style.display = 'none';
+            messageTimeout = null;
+          }, duration);
         }
-    }
-
-    // Utility function to generate UUIDs for elements
-    function generateUUID() {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-            const r = Math.random() * 16 | 0;
-            const v = c === 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-        });
-    }
-
-    // Debounce utility for handling rapid events
-    function debounce(func, wait) {
+      }
+      
+      /**
+       * Generate message icon HTML
+       * @param {string} type - Message type
+       * @return {string} Icon HTML
+       */
+      function getMessageIcon(type) {
+        switch (type) {
+          case 'success': return '✓';
+          case 'warning': return '⚠';
+          case 'error': return '✗';
+          default: return 'ℹ';
+        }
+      }
+      
+      /**
+       * Generate a unique ID
+       * @param {string} prefix - ID prefix
+       * @return {string} Unique ID
+       */
+      function generateId(prefix = '') {
+        return `${prefix}${Math.random().toString(36).substring(2, 11)}`;
+      }
+      
+      /**
+       * Create a debounced function
+       * @param {Function} func - Function to debounce
+       * @param {number} wait - Wait time in ms
+       * @return {Function} Debounced function
+       */
+      function debounce(func, wait = 300) {
         let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
+        return function(...args) {
+          const context = this;
+          clearTimeout(timeout);
+          timeout = setTimeout(() => func.apply(context, args), wait);
         };
-    }
-
-    // Throttle utility for limiting function calls
-    function throttle(func, limit) {
+      }
+      
+      /**
+       * Create a throttled function
+       * @param {Function} func - Function to throttle
+       * @param {number} limit - Limit in ms
+       * @return {Function} Throttled function
+       */
+      function throttle(func, limit = 300) {
         let inThrottle;
-        return function executedFunction(...args) {
-            if (!inThrottle) {
-                func(...args);
-                inThrottle = true;
-                setTimeout(() => inThrottle = false, limit);
-            }
+        return function(...args) {
+          const context = this;
+          if (!inThrottle) {
+            func.apply(context, args);
+            inThrottle = true;
+            setTimeout(() => inThrottle = false, limit);
+          }
         };
-    }
-
-    // Data validation helpers
-    function validateNumber(value, min = null, max = null) {
-        const num = parseFloat(value);
-        if (isNaN(num)) return false;
-        if (min !== null && num < min) return false;
-        if (max !== null && num > max) return false;
-        return true;
-    }
-
-    function validateColor(color) {
-        if (!color) return false;
-        // Test for hex colors
-        if (/^#([A-Fa-f0-9]{3}){1,2}$/.test(color)) return true;
-        // Test for rgb/rgba
-        if (/^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*(?:,\s*[\d.]+\s*)?\)$/.test(color)) return true;
-        return false;
-    }
-
-    // File helpers
-    function getFileExtension(filename) {
-        return filename.slice((filename.lastIndexOf('.') - 1 >>> 0) + 2);
-    }
-
-    function isImageFile(file) {
-        const ext = getFileExtension(file.name).toLowerCase();
-        return ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext);
-    }
-
-    // Return public API
-    return {
-        init,
-        showError,
+      }
+      
+      /**
+       * Shuffle array in place
+       * @param {Array} array - Array to shuffle
+       * @return {Array} Shuffled array
+       */
+      function shuffleArray(array) {
+        const newArray = [...array];
+        for (let i = newArray.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+        }
+        return newArray;
+      }
+      
+      /**
+       * Format timestamp to string
+       * @param {number} timestamp - Timestamp in ms
+       * @return {string} Formatted string
+       */
+      function formatTimestamp(timestamp) {
+        if (!timestamp) return '';
+        const date = new Date(timestamp);
+        return date.toLocaleString();
+      }
+      
+      /**
+       * Format seconds to MM:SS
+       * @param {number} seconds - Seconds
+       * @return {string} Formatted time
+       */
+      function formatTime(seconds) {
+        if (isNaN(seconds)) return '00:00';
+        const minutes = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      }
+      
+      // Public API
+      return {
         showLoadingIndicator,
-        listen,
-        generateUUID,
+        showError,
+        showSuccess,
+        showMessage,
+        generateId,
         debounce,
         throttle,
-        validateNumber,
-        validateColor,
-        isImageFile,
-        getFileExtension
-    };
-})();
-</script>
+        shuffleArray,
+        formatTimestamp,
+        formatTime
+      };
+    })();
+    </script>
