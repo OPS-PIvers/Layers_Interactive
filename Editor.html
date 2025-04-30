@@ -27,8 +27,10 @@
     <button id="add-text-button" title="Add Text">Text</button>
     <div class="separator"></div>
     <button id="delete-button" title="Delete Selected" disabled>Delete</button>
+    <div class="separator"></div>
+    <button id="upload-image-button" title="Upload Image">Upload Image</button>
+    <input type="file" id="image-upload-input" accept="image/*" style="display: none;">
   </div>
-  
   <div id="main-content">
     <div id="slide-navigator"></div>
     <div id="canvas-container">
@@ -58,6 +60,7 @@
   <?!= include('js/serverClient') ?>
   <?!= include('js/stateManager') ?>
   <?!= include('js/canvasController') ?>
+  <?!= include('js/imageManager') ?>
   <?!= include('js/fontLoader') ?>
   <?!= include('js/animationController') ?>
   <?!= include('js/textEditor') ?>

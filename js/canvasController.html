@@ -152,32 +152,38 @@
         // Create object based on type
         let obj;
         
+        // In the addObject function, modify the switch statement:
         switch (data.type) {
-          case 'rect':
+        case 'rect':
             obj = new fabric.Rect(opts);
             break;
             
-          case 'ellipse':
+        case 'ellipse':
             obj = new fabric.Ellipse({
-              ...opts,
-              rx: data.width / 2,
-              ry: data.height / 2
+            ...opts,
+            rx: data.width / 2,
+            ry: data.height / 2
             });
             break;
             
-          case 'textbox':
+        case 'textbox':
             obj = new fabric.Textbox(data.text?.content || 'Text', {
-              ...opts,
-              fontSize: data.text?.fontSize || 16,
-              fontFamily: data.text?.fontFamily || 'Arial',
-              fontWeight: data.text?.fontWeight || 'normal',
-              fontStyle: data.text?.fontStyle || 'normal',
-              textAlign: data.text?.textAlign || 'center',
-              fill: data.text?.fill || '#000000'
+            ...opts,
+            fontSize: data.text?.fontSize || 16,
+            fontFamily: data.text?.fontFamily || 'Arial',
+            fontWeight: data.text?.fontWeight || 'normal',
+            fontStyle: data.text?.fontStyle || 'normal',
+            textAlign: data.text?.textAlign || 'center',
+            fill: data.text?.fill || '#000000'
             });
             break;
             
-          default:
+        case 'image':
+            // For image objects, we need to load asynchronously
+            // Return a promise instead of an object directly
+            return addImageObject(data);
+            
+        default:
             console.error('Unknown object type:', data.type);
             return null;
         }
@@ -274,15 +280,17 @@
           
           // Update shadow
           if (data.style.shadowEnabled) {
-            obj.setShadow({
-              color: data.style.shadowColor || '#000000',
-              blur: data.style.shadowBlur || 5,
-              offsetX: data.style.shadowOffsetX || 0,
-              offsetY: data.style.shadowOffsetY || 0
+            // Use the universal set method which works with all object types
+            const shadowObj = new fabric.Shadow({
+                color: data.style.shadowColor || '#000000',
+                blur: data.style.shadowBlur || 5,
+                offsetX: data.style.shadowOffsetX || 0,
+                offsetY: data.style.shadowOffsetY || 0
             });
-          } else {
-            obj.setShadow(null);
-          }
+            obj.set('shadow', shadowObj);
+            } else {
+            obj.set('shadow', null);
+            }
         }
         
         // Update text if needed
@@ -491,7 +499,81 @@
         
         return true;
       }
-      
+      /**
+     * Add image object to canvas from data
+     * @param {Object} data - Element data with image properties
+     * @return {Promise<fabric.Object>} Promise resolving to created object
+     */
+    function addImageObject(data) {
+    return new Promise((resolve, reject) => {
+        if (!canvas) {
+        reject(new Error('Canvas not available'));
+        return;
+        }
+        
+        // Load image data
+        ServerClient.loadImage(data.fileId)
+        .then(dataUrl => {
+            fabric.Image.fromURL(dataUrl, img => {
+            if (!img) {
+                reject(new Error('Failed to create image object'));
+                return;
+            }
+            
+            // Set basic properties
+            img.set({
+                left: data.left || 100,
+                top: data.top || 100,
+                width: data.width,
+                height: data.height,
+                angle: data.angle || 0,
+                id: data.id,
+                selectable: isEditor,
+                hasControls: isEditor,
+                hasBorders: isEditor
+            });
+            
+            // Set style properties if available
+            if (data.style) {
+                img.set({
+                opacity: data.style.opacity !== undefined ? data.style.opacity : 1
+                });
+                
+                // Add shadow if enabled
+                if (data.style.shadowEnabled) {
+                const shadow = new fabric.Shadow({
+                    color: data.style.shadowColor || '#000000',
+                    blur: data.style.shadowBlur || 5,
+                    offsetX: data.style.shadowOffsetX || 0,
+                    offsetY: data.style.shadowOffsetY || 0
+                });
+                img.set('shadow', shadow);
+                }
+            }
+            
+            // Add to canvas
+            canvas.add(img);
+            
+            // Add interaction handlers
+            if (data.interactions) {
+                InteractionHandler.attachListenersToObject(img);
+            }
+            
+            // Set initial visibility
+            if (data.initiallyHidden) {
+                img.visible = false;
+            }
+            
+            canvas.renderAll();
+            resolve(img);
+            });
+        })
+        .catch(error => {
+            console.error('Error loading image:', error);
+            reject(error);
+        });
+    });
+    }
       /**
        * Show or hide elements
        * @param {Array} elementIds - Array of element IDs

@@ -47,6 +47,11 @@
                         InteractionHandler.init('editor');
                     }
                     
+                    // Initialize ImageManager for image uploading
+                    if (typeof ImageManager !== 'undefined' && typeof ImageManager.init === 'function') {
+                        ImageManager.init();
+                    }
+                    
                 } else if (mode === 'viewer') {
                     console.log("Initializing viewer components");
                     
@@ -159,4 +164,4 @@
             return confirmationMessage; // For older browsers
         }
     });
-    </script>
+</script>

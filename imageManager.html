@@ -1,0 +1,183 @@
+<script>
+    /**
+     * Manages image uploads and additions to the canvas
+     */
+    const ImageManager = (() => {
+      /**
+       * Initialize image manager
+       */
+      function init() {
+        // Set up event listeners
+        const uploadButton = document.getElementById('upload-image-button');
+        const uploadInput = document.getElementById('image-upload-input');
+        
+        if (uploadButton && uploadInput) {
+          uploadButton.addEventListener('click', () => {
+            uploadInput.click();
+          });
+          
+          uploadInput.addEventListener('change', handleImageUpload);
+        }
+        
+        // Allow pasting images from clipboard
+        document.addEventListener('paste', handlePasteEvent);
+      }
+      
+      /**
+       * Handle image file upload
+       * @param {Event} event - Change event from file input
+       */
+      function handleImageUpload(event) {
+        const file = event.target.files[0];
+        if (!file || !file.type.startsWith('image/')) {
+          Utils.showError('Please select a valid image file');
+          return;
+        }
+        
+        processImageFile(file);
+        
+        // Reset the input so the same file can be selected again
+        event.target.value = '';
+      }
+      
+      /**
+       * Handle paste event for images
+       * @param {Event} event - Paste event
+       */
+      function handlePasteEvent(event) {
+        // Only process paste in editor mode
+        if (!document.querySelector('.editor-view')) return;
+        
+        const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+        
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image') !== -1) {
+            const file = items[i].getAsFile();
+            processImageFile(file);
+            event.preventDefault();
+            return;
+          }
+        }
+      }
+      
+      /**
+       * Process an image file
+       * @param {File} file - Image file
+       */
+      function processImageFile(file) {
+        Utils.showLoadingIndicator(true, 'Processing image...');
+        
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const dataUrl = e.target.result;
+          
+          // Upload to server
+          ServerClient.uploadImage(dataUrl, file.name)
+            .then(result => {
+              if (result && result.fileId) {
+                // Add image to canvas
+                addImageToCanvas(result.fileId, dataUrl);
+              } else {
+                throw new Error('Failed to upload image');
+              }
+            })
+            .catch(error => {
+              console.error('Error uploading image:', error);
+              Utils.showError(`Failed to upload image: ${error.message}`);
+            })
+            .finally(() => {
+              Utils.showLoadingIndicator(false);
+            });
+        };
+        
+        reader.onerror = () => {
+          Utils.showLoadingIndicator(false);
+          Utils.showError('Failed to read image file');
+        };
+        
+        reader.readAsDataURL(file);
+      }
+      
+      /**
+       * Add image to canvas
+       * @param {string} fileId - Image file ID
+       * @param {string} dataUrl - Image data URL (optional, for preview)
+       */
+      function addImageToCanvas(fileId, dataUrl = null) {
+        const loadImage = dataUrl || ServerClient.loadImage(fileId);
+        
+        // Handle both direct data URL and Promise
+        Promise.resolve(loadImage)
+          .then(imgUrl => {
+            fabric.Image.fromURL(imgUrl, img => {
+              if (!img) {
+                throw new Error('Failed to create image');
+              }
+              
+              // Scale image to fit on canvas (max 300px width/height)
+              const maxSize = 300;
+              if (img.width > maxSize || img.height > maxSize) {
+                const scale = Math.min(maxSize / img.width, maxSize / img.height);
+                img.scale(scale);
+              }
+              
+              // Add to canvas
+              const canvas = CanvasController.getCanvas();
+              if (canvas) {
+                // Generate element ID and data
+                const elementId = Utils.generateId('element-');
+                const elementData = {
+                  id: elementId,
+                  type: 'image',
+                  fileId: fileId,
+                  left: 50,
+                  top: 50,
+                  width: img.getScaledWidth(),
+                  height: img.getScaledHeight(),
+                  nickname: `Image ${file.name || elementId}`,
+                  style: {
+                    opacity: 1
+                  }
+                };
+                
+                // Set properties on image object
+                img.set({
+                  id: elementId,
+                  left: elementData.left,
+                  top: elementData.top,
+                  selectable: true,
+                  hasControls: true,
+                  hasBorders: true
+                });
+                
+                // Add element data to state
+                StateManager.addElementData(elementData);
+                
+                // Add to canvas
+                canvas.add(img);
+                canvas.setActiveObject(img);
+                canvas.renderAll();
+                
+                // Update sequence list
+                if (typeof EditorUI !== 'undefined' && typeof EditorUI.updateSequenceList === 'function') {
+                  EditorUI.updateSequenceList();
+                }
+                
+                Utils.showSuccess('Image added successfully');
+              }
+            });
+          })
+          .catch(error => {
+            console.error('Error adding image to canvas:', error);
+            Utils.showError(`Failed to add image: ${error.message}`);
+          });
+      }
+      
+      // Public API
+      return {
+        init,
+        handleImageUpload,
+        addImageToCanvas
+      };
+    })();
+    </script>
