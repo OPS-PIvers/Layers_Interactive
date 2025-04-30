@@ -14,7 +14,7 @@
                 // Different required elements based on mode
                 let requiredElements = [
                     'loading-indicator', 
-                    'message-modal'  // Changed from 'error-message' to 'message-modal'
+                    'message-modal'
                 ];
                 
                 // Add mode-specific required elements
@@ -22,7 +22,7 @@
                     requiredElements = requiredElements.concat([
                         'properties-panel',
                         'toolbar',
-                        'slide-navigator', // Changed from 'slide-list' to 'slide-navigator'
+                        'slide-navigator',
                         'sequence-list'
                     ]);
                 }
@@ -34,20 +34,36 @@
                 }
     
                 // Initialize modules in correct order
-                Utils.init(); // Initialize utility functions and DOM references first
-                StateManager.init(); // Initialize state management
+                // REMOVED: Utils.init() - this function doesn't exist
+                
+                // Initialize state management
+                StateManager.init();
                 
                 // Initialize canvas controllers
                 if (mode === 'editor' || editorCanvas) {
                     console.log("Initializing editor components");
                     CanvasController.initCanvas('editor-canvas', true);
-                    EditorUI.init(); // Initialize editor UI components
-                    QuizEditor.initQuizEditor(); // Initialize quiz editing capabilities
+                    
+                    // Check if EditorUI has init method before calling
+                    if (typeof EditorUI.init === 'function') {
+                        EditorUI.init();
+                    } else if (typeof EditorUI.initEditorUI === 'function') {
+                        EditorUI.initEditorUI(); // Alternative method name found in EditorUI
+                    }
+                    
+                    // Check if QuizEditor has init method
+                    if (typeof QuizEditor.initQuizEditor === 'function') {
+                        QuizEditor.initQuizEditor();
+                    }
                 } else if (mode === 'viewer' || viewerCanvas) {
                     console.log("Initializing viewer components");
                     CanvasController.initCanvas('viewer-canvas', false);
-                    InteractionHandler.init('viewer'); // Initialize viewer interaction handling
-                    QuizPlayer.init(); // Initialize quiz playing capabilities
+                    InteractionHandler.init('viewer');
+                    
+                    // Check if QuizPlayer has init method
+                    if (typeof QuizPlayer.init === 'function') {
+                        QuizPlayer.init();
+                    }
                     
                     // Load project if projectId is provided
                     if (projectId) {
@@ -75,7 +91,12 @@
                     console.log(`Retrying initialization in 100ms (attempt ${initAttempts}/${maxAttempts})`);
                     setTimeout(() => initializeApp(mode, projectId), 100);
                 } else {
-                    Utils.showError('Failed to initialize application. Please refresh the page.');
+                    // Use the proper error function without requiring Utils.init
+                    if (typeof Utils.showError === 'function') {
+                        Utils.showError('Failed to initialize application. Please refresh the page.');
+                    } else {
+                        console.error('Failed to initialize application. Please refresh the page.');
+                    }
                 }
             }
         }
@@ -95,14 +116,18 @@
                         console.log("Project loaded successfully in viewer mode");
                         
                         // Set up sequence if available
-                        InteractionHandler.setupSequence();
+                        if (typeof InteractionHandler.setupSequence === 'function') {
+                            InteractionHandler.setupSequence();
+                        } else if (typeof InteractionHandler.applyInitialSequenceState === 'function') {
+                            InteractionHandler.applyInitialSequenceState(); // Alternative method name from the code
+                        }
                     }
                 } else {
                     throw new Error("Failed to load project data");
                 }
             } catch (error) {
-                 console.error("Failed to load project:", error);
-                 Utils.showError(`Failed to load project: ${error.message}`);
+                console.error("Failed to load project:", error);
+                Utils.showError(`Failed to load project: ${error.message}`);
             } finally {
                 Utils.showLoadingIndicator(false);
             }
@@ -118,10 +143,10 @@
         // A simple check: presence of editor-specific elements
         const isEditorView = !!document.getElementById('editor-canvas');
     
-        if (isEditorView && StateManager.isDirty()) {
+        if (isEditorView && typeof StateManager.isDirty === 'function' && StateManager.isDirty()) {
             const confirmationMessage = 'You have unsaved changes. Are you sure you want to leave?';
             event.returnValue = confirmationMessage; // Standard for most browsers
             return confirmationMessage; // For older browsers
         }
     });
-</script>
+    </script>
