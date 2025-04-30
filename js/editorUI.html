@@ -1,748 +1,1340 @@
 <script>
-const EditorUI = (() => {
-    let domRefs = {};
-    let initAttempts = 0;
-    const maxAttempts = 5;
-
-    function init() {
-        return new Promise((resolve, reject) => {
+    /**
+     * Editor UI Controller
+     * Manages the editor interface, panels, and user interactions
+     */
+    const EditorUI = (() => {
+        // DOM references cache
+        let domRefs = {};
+        
+        // Initialization tracking
+        let isInitialized = false;
+        let initAttempts = 0;
+        const maxInitAttempts = 5;
+        
+        // Sortable instances
+        let sequenceSortableInstance = null;
+        
+        /**
+         * Initialize editor UI
+         * @return {boolean} Whether initialization was successful
+         */
+        function initEditorUI() {
             try {
-                initializeDOMReferences();
-                initializeEventListeners();
-                resolve();
-            } catch (error) {
-                console.error('EditorUI initialization error:', error);
-                initAttempts++;
+                console.log("Initializing EditorUI...");
                 
-                if (initAttempts < maxAttempts) {
-                    console.log(`Retrying EditorUI initialization in 100ms (attempt ${initAttempts}/${maxAttempts})`);
-                    setTimeout(() => init().then(resolve).catch(reject), 100);
+                // Cache DOM references
+                _initDOMReferences();
+                
+                // Initialize UI components
+                _initToolbar();
+                _initSidebarTabs();
+                _initSlideNavigator();
+                _initSequenceList();
+                
+                // Initialize panels
+                updatePropertiesPanel(null); // Initial state (no selection)
+                updateToolbarState(false);
+                updateProjectTitleDisplay();
+                
+                // Check save status - use the isDirty function if available
+                if (typeof StateManager.isDirty === 'function') {
+                    updateSaveStatus(StateManager.isDirty());
                 } else {
-                    reject(new Error('Failed to initialize EditorUI after multiple attempts'));
+                    console.warn("StateManager.isDirty function is not available");
+                    updateSaveStatus(true); // Assume dirty if function not available
+                }
+                
+                isInitialized = true;
+                console.log("EditorUI initialized successfully");
+                return true;
+            } catch (error) {
+                console.error("Failed to initialize EditorUI:", error);
+                
+                // Retry initialization up to maxInitAttempts times
+                initAttempts++;
+                if (initAttempts < maxInitAttempts) {
+                    console.log(`Retrying EditorUI initialization in 200ms (attempt ${initAttempts}/${maxInitAttempts})...`);
+                    setTimeout(initEditorUI, 200);
+                    return false;
+                } else {
+                    // Show error message if Utils is available
+                    if (typeof Utils !== 'undefined' && typeof Utils.showError === 'function') {
+                        Utils.showError("Failed to initialize editor interface. Please refresh the page.");
+                    } else {
+                        console.error("Failed to initialize EditorUI after multiple attempts");
+                    }
+                    return false;
                 }
             }
-        });
-    }
-
-    function initializeDOMReferences() {
-        // Define all required DOM elements
-        const required = {
-            propertiesPanel: 'properties-panel',
-            toolbar: 'toolbar',
-            slideList: 'slide-list',
-            sequenceList: 'sequence-list',
-            addSlideBtn: 'add-slide-button',
-            deleteSlideBtn: 'delete-slide-button',
-            saveBtn: 'save-button',
-            undoBtn: 'undo-button',
-            redoBtn: 'redo-button'
-        };
-
-        // Verify all required elements exist
-        const missing = [];
-        domRefs = {};
-
-        for (const [key, id] of Object.entries(required)) {
-            const element = document.getElementById(id);
-            if (!element) {
-                missing.push(id);
-            } else {
-                domRefs[key] = element;
-            }
         }
-
-        if (missing.length > 0) {
-            throw new Error(`Missing required DOM elements: ${missing.join(', ')}`);
-        }
-    }
-
-    function initializeEventListeners() {
-        // Only attach listeners if we have valid DOM references
-        if (!domRefs.addSlideBtn || !domRefs.deleteSlideBtn || !domRefs.saveBtn) {
-            throw new Error('Cannot initialize event listeners: missing DOM references');
-        }
-
-        // Attach event listeners with error handling
-        try {
-            domRefs.addSlideBtn.addEventListener('click', handleAddSlide);
-            domRefs.deleteSlideBtn.addEventListener('click', handleDeleteSlide);
-            domRefs.saveBtn.addEventListener('click', handleSave);
+        
+        /**
+         * Initialize DOM references
+         * Cache frequently accessed DOM elements
+         */
+        function _initDOMReferences() {
+            domRefs = {
+                // Main containers
+                propertiesPanel: document.getElementById('properties-panel'),
+                sequencePanel: document.getElementById('sequence-panel'),
+                sequenceList: document.getElementById('sequence-list'),
+                canvasContainer: document.getElementById('canvas-container'),
+                
+                // Toolbars and navigation
+                toolbar: document.getElementById('toolbar'),
+                sidebarTabs: document.getElementById('sidebar-tabs'),
+                
+                // Buttons
+                newButton: document.getElementById('new-button'),
+                saveButton: document.getElementById('save-button'),
+                loadButton: document.getElementById('load-button'),
+                deleteButton: document.getElementById('delete-button'),
+                
+                // Modals
+                textEditorModal: document.getElementById('text-editor-modal'),
+                quizEditorModal: document.getElementById('quiz-editor-modal'),
+                timelineEditorModal: document.getElementById('timeline-editor-modal'),
+                loadingIndicator: document.getElementById('loading-indicator'),
+                messageModal: document.getElementById('message-modal')
+            };
             
-            // Add undo/redo handlers
-            if (domRefs.undoBtn && domRefs.redoBtn) {
-                domRefs.undoBtn.addEventListener('click', handleUndo);
-                domRefs.redoBtn.addEventListener('click', handleRedo);
+            // Verify that critical elements exist
+            const criticalElements = ['propertiesPanel', 'sequenceList', 'canvasContainer', 'toolbar'];
+            for (const elem of criticalElements) {
+                if (!domRefs[elem]) {
+                    throw new Error(`Critical DOM element not found: ${elem}`);
+                }
             }
-
-            // Initialize drag-drop for sequence list
-            if (domRefs.sequenceList) {
-                initializeSequenceListSorting();
-            }
-        } catch (error) {
-            console.error('Error attaching event listeners:', error);
-            throw error;
         }
-    }
-
-    let propertiesPanelContainer;
-    let sequenceListContainer;
-    let sequenceSortableInstance = null; // To manage SortableJS instance
-    let slideListContainer;
-    let currentSlideBgFilenameDisplay;
-    let saveStatusDisplay;
-    let projectTitleDisplay;
-    let loadModal;
-    let loadProjectListContainer;
-
-
-    function _initDOMReferences() {
-        propertiesPanelContainer = document.getElementById('element-properties-content');
-        sequenceListContainer = document.getElementById('sequence-list');
-        slideListContainer = document.getElementById('slide-list');
-        currentSlideBgFilenameDisplay = document.getElementById('current-bg-filename');
-        saveStatusDisplay = document.getElementById('save-status');
-        projectTitleDisplay = document.getElementById('project-title-display');
-        loadModal = document.getElementById('load-project-modal');
-        loadProjectListContainer = document.getElementById('load-project-list');
-    }
-
-    function _initToolbar() {
-        Utils.listen('#new-button', 'click', handleNewProject);
-        Utils.listen('#save-button', 'click', handleSaveProject);
-        Utils.listen('#load-button', 'click', handleShowLoadModal);
-        Utils.listen('#add-rect-button', 'click', () => addShape('rect'));
-        Utils.listen('#add-ellipse-button', 'click', () => addShape('ellipse'));
-        Utils.listen('#add-text-button', 'click', () => addShape('textbox'));
-        Utils.listen('#delete-button', 'click', CanvasController.deleteSelectedObject);
-
-        // Add listener for project title editing? Maybe later.
-        // projectTitleDisplay.onclick = handleEditTitle;
-    }
-
-    function _initSidebarTabs() {
-        document.querySelectorAll('#sidebar-tabs .tab-link').forEach(button => {
-            Utils.listen(button, 'click', (e) => {
-                const targetTabId = e.target.dataset.tab;
-                // Deactivate all tabs and content
-                document.querySelectorAll('#sidebar-tabs .tab-link').forEach(btn => btn.classList.remove('active'));
-                document.querySelectorAll('#right-sidebar .sidebar-tab-content').forEach(content => content.classList.remove('active'));
-                // Activate the clicked tab and corresponding content
-                e.target.classList.add('active');
-                document.getElementById(targetTabId)?.classList.add('active');
+        
+        /**
+         * Initialize toolbar
+         * Set up event listeners for toolbar buttons
+         */
+        function _initToolbar() {
+            // Main project actions
+            Utils.listen(domRefs.newButton, 'click', handleNewProject);
+            Utils.listen(domRefs.saveButton, 'click', handleSaveProject);
+            Utils.listen(domRefs.loadButton, 'click', handleShowLoadModal);
+            
+            // Element creation buttons
+            Utils.listen('#add-rect-button', 'click', () => addShape('rect'));
+            Utils.listen('#add-ellipse-button', 'click', () => addShape('ellipse'));
+            Utils.listen('#add-text-button', 'click', () => addShape('textbox'));
+            
+            // Element manipulation buttons
+            Utils.listen(domRefs.deleteButton, 'click', () => {
+                if (CanvasController && typeof CanvasController.deleteSelected === 'function') {
+                    CanvasController.deleteSelected();
+                    updateSequenceList(); // Update sequence list after deletion
+                }
             });
-        });
-    }
-
-    function _initSlideNavigator() {
-        Utils.listen('#add-slide-button', 'click', handleAddSlide);
-        Utils.listen('#delete-slide-button', 'click', handleDeleteSlide);
-        Utils.listen('#upload-bg-button', 'click', () => document.getElementById('slide-bg-input').click());
-        Utils.listen('#slide-bg-input', 'change', handleBackgroundUpload);
-
-        updateSlideList();
-        updateSlideBackgroundDisplay();
-    }
-
-    function _initSequenceList() {
-        sequenceListContainer = document.getElementById('sequence-list');
-        
-        if (!sequenceListContainer) {
-            console.error("Sequence list container not found. Will retry later.");
-            // Setup a retry mechanism
-            setTimeout(_initSequenceList, 500);
-            return;
         }
         
-        try {
-            // Destroy previous instance if it exists
-            if (sequenceSortableInstance) {
-                sequenceSortableInstance.destroy();
+        /**
+         * Initialize sidebar tabs
+         * Set up event listeners for tab switching
+         */
+        function _initSidebarTabs() {
+            // Get tab buttons
+            const tabButtons = document.querySelectorAll('#sidebar-tabs .tab-link');
+            if (!tabButtons.length) {
+                console.warn("No sidebar tabs found");
+                return;
             }
             
-            // Initialize SortableJS
-            sequenceSortableInstance = new Sortable(sequenceListContainer, {
-                animation: 150,
-                ghostClass: 'sortable-ghost',
-                dragClass: 'sortable-drag',
-                onStart: function(evt) {
-                    // Add visual cue for dragging
-                    evt.item.classList.add('dragging');
-                },
-                onEnd: function(evt) {
-                    evt.item.classList.remove('dragging');
+            // Add click handlers
+            tabButtons.forEach(button => {
+                Utils.listen(button, 'click', (e) => {
+                    // Get target tab ID
+                    const targetTabId = e.target.dataset.tab;
+                    if (!targetTabId) return;
                     
-                    // Safely get new sequence order
-                    try {
-                        const sequence = Array.from(evt.to.children)
-                            .filter(item => item.dataset && item.dataset.elementId) // Ensure valid items only
-                            .map(item => item.dataset.elementId);
-                        
-                        if (sequence.length > 0) {
-                            StateManager.setSlideSequence(sequence);
-                            console.log("Sequence updated:", sequence);
-                        }
-                    } catch (error) {
-                        console.error("Error updating sequence:", error);
+                    // Deactivate all tabs and content
+                    tabButtons.forEach(btn => btn.classList.remove('active'));
+                    document.querySelectorAll('#right-sidebar .sidebar-tab-content').forEach(content => {
+                        content.classList.remove('active');
+                    });
+                    
+                    // Activate the clicked tab and corresponding content
+                    e.target.classList.add('active');
+                    const targetContent = document.getElementById(targetTabId);
+                    if (targetContent) {
+                        targetContent.classList.add('active');
                     }
-                },
+                });
+            });
+        }
+        
+        /**
+         * Initialize slide navigator
+         * Set up buttons and slide list
+         */
+        function _initSlideNavigator() {
+            // Add slide button
+            Utils.listen('#add-slide-button', 'click', handleAddSlide);
+            
+            // Delete slide button
+            Utils.listen('#delete-slide-button', 'click', handleDeleteSlide);
+            
+            // Background upload button
+            Utils.listen('#upload-bg-button', 'click', () => {
+                const bgInput = document.getElementById('slide-bg-input');
+                if (bgInput) bgInput.click();
             });
             
-            updateSequenceList(); // Initial population
-            console.log("Sequence list initialized successfully");
-        } catch (error) {
-            console.error("Error initializing sequence list:", error);
-            // Maybe try again or show error
+            // Background file input change
+            Utils.listen('#slide-bg-input', 'change', handleBackgroundUpload);
+            
+            // Initial render
+            updateSlideList();
         }
-    }
-
-
-    // --- Event Handlers ---
-
-    function handleNewProject() {
-        if (StateManager.isDirty() && !confirm("You have unsaved changes. Are you sure you want to start a new project?")) {
-            return;
-        }
-        StateManager.init(true); // Re-initialize state for editor
-        CanvasController.loadSlide(StateManager.getCurrentSlide()); // Load the default slide
-        updateSlideList();
-        updateSequenceList();
-        updatePropertiesPanel(null); // Clear properties panel
-        updateProjectTitleDisplay();
-        updateSaveStatus(StateManager.isDirty());
-    }
-
-    async function handleSaveProject() {
-        const project = StateManager.getCurrentProject();
-        if (!project) return;
-        try {
-             // Ensure current canvas state (like active selection props) is saved before stringifying
-             const activeObj = CanvasController.getCanvas()?.getActiveObject();
-             if (activeObj) {
-                _savePropertiesFromUI(activeObj.id); // Force save current props if any are selected
-             }
-
-             const jsonString = StateManager.getProjectJsonString();
-             const result = await ServerClient.saveProject(jsonString, project.projectId, project.title);
-             StateManager.markAsSaved(result.projectId, result.lastModified); // Update state with new ID/status
-             Utils.showError("Project saved successfully!"); // Use error modal as temp success message
-             console.log("Project saved:", result);
-        } catch (error) {
-             console.error("Save failed:", error);
-             Utils.showError(`Save failed: ${error.message}`);
-             updateSaveStatus(true); // Still dirty if save failed
-        }
-    }
-
-    async function handleShowLoadModal() {
-         if (StateManager.isDirty() && !confirm("You have unsaved changes. Are you sure you want to load another project?")) {
-            return;
-        }
-        loadModal.classList.add('active');
-        loadProjectListContainer.innerHTML = '<p>Loading projects...</p>'; // Show loading state
-        try {
-            const projects = await ServerClient.listProjects();
-            renderLoadProjectList(projects);
-        } catch (error) {
-             console.error("Failed to list projects:", error);
-             loadProjectListContainer.innerHTML = `<p class="error-message">Error loading projects: ${error.message}</p>`;
-        }
-    }
-
-    function closeLoadModal() {
-        loadModal.classList.remove('active');
-    }
-
-    async function handleLoadProject(projectId) {
-        closeLoadModal();
-        if (!projectId) return;
-         Utils.showLoadingIndicator(true, 'Loading Project...');
-        try {
-            const jsonString = await ServerClient.loadProject(projectId);
-            if (StateManager.loadProjectData(jsonString)) {
-                // Load succeeded
-                 CanvasController.loadSlide(StateManager.getCurrentSlide());
-                 updateSlideList();
-                 updateSequenceList();
-                 updatePropertiesPanel(null);
-                 updateProjectTitleDisplay();
-                 updateSaveStatus(false); // Loaded project is clean
-            } else {
-                // loadProjectData showed error via Utils.showError
+        
+        /**
+         * Initialize sequence list
+         * Set up sortable list for slide sequence
+         */
+        function _initSequenceList() {
+            // Retry if sequence list is not available yet
+            if (!domRefs.sequenceList) {
+                console.warn("Sequence list not found, will retry initialization");
+                setTimeout(_initSequenceList, 200);
+                return;
             }
-        } catch (error) {
-            console.error("Load failed:", error);
-            Utils.showError(`Load failed: ${error.message}`);
-        } finally {
-             Utils.showLoadingIndicator(false);
-        }
-    }
-
-
-    function addShape(type) {
-        const slide = StateManager.getCurrentSlide();
-        if (!slide) return;
-
-        const elementData = {
-            type: type,
-            id: Utils.generateUUID(),
-            left: 50, top: 50, width: (type==='textbox'?150:100), height: (type==='textbox'?40:50), angle: 0,
-            nickname: `${type.charAt(0).toUpperCase() + type.slice(1)} ${slide.elements.length + 1}`,
-            initiallyHidden: false,
-             // Add default nested structures immediately
-             style: {
-                color: type === 'textbox' ? 'rgba(0,0,0,0)' : '#4285F4', // Transparent background for text, blue for shapes
-                opacity: 1,
-                outlineEnabled: false,
-                shadowEnabled: false,
-             },
-             text: type === 'textbox' ? {
-                 content: 'New Text',
-                 fontSize: 16,
-                 fill: '#333333' // Default text color
-             } : null,
-             interactions: {
-                 triggers: { onClick: false },
-                 features: {
-                     reveal: { enabled: false, targetIds: [] },
-                     spotlight: { enabled: false, type: 'circle' },
-                     panAndZoom: { enabled: false, targetX: 0, targetY: 0, targetZoom: 1.5 },
-                     quiz: { enabled: false, feedbackTiming: 'end', creatorEmail: '', questions: [] }
-                 }
-             }
-        };
-
-        StateManager.addElementData(elementData);
-        const fabricObject = CanvasController.addObject(elementData);
-        if (fabricObject) {
-            CanvasController.setActiveObject(fabricObject.id); // Select the new object
-        }
-         updateSequenceList(); // Update sequence panel if needed (though not in sequence yet)
-    }
-
-    function handleAddSlide() {
-        const newSlideId = StateManager.addSlide();
-        if (newSlideId) {
-            StateManager.setCurrentSlideId(newSlideId);
-            CanvasController.loadSlide(StateManager.getCurrentSlide());
-            updateSlideList(); // Update UI list
-            updateSequenceList(); // Clear sequence for new slide
-            updatePropertiesPanel(null); // Clear properties
-             updateSlideBackgroundDisplay(); // Update bg display
-        }
-    }
-
-    function handleDeleteSlide() {
-         const slideToDelete = StateManager.getCurrentSlide();
-         if (!slideToDelete) return;
-         if (confirm(`Are you sure you want to delete slide "${slideToDelete.title || slideToDelete.slideId}"? This cannot be undone.`)) {
-             const currentId = slideToDelete.slideId;
-             if (StateManager.deleteSlide(currentId)) {
-                 // Deletion successful, state manager already switched slide if needed
-                 const newCurrentSlide = StateManager.getCurrentSlide();
-                 CanvasController.loadSlide(newCurrentSlide);
-                 updateSlideList();
-                 updateSequenceList();
-                 updatePropertiesPanel(null);
-                 updateSlideBackgroundDisplay();
-             }
-             // Error message handled by StateManager if deletion fails
-         }
-    }
-
-    async function handleBackgroundUpload(event) {
-        const file = event.target.files[0];
-        if (!file || !file.type.startsWith('image/')) {
-            Utils.showError("Please select a valid image file.");
-            return;
-        }
-
-        Utils.showLoadingIndicator(true, 'Reading Image...');
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            const dataUrl = e.target.result;
-            Utils.showLoadingIndicator(true, 'Uploading Image...'); // Switch message
+            
             try {
-                const result = await ServerClient.uploadImage(dataUrl, file.name);
-                await CanvasController.setBackgroundImage(result.fileId); // Let CanvasController handle setting and updating state
-                 updateSlideBackgroundDisplay(result.fileId, file.name);
+                // Clean up existing instance if any
+                if (sequenceSortableInstance) {
+                    sequenceSortableInstance.destroy();
+                }
+                
+                // Create new instance
+                sequenceSortableInstance = new Sortable(domRefs.sequenceList, {
+                    animation: 150,
+                    ghostClass: 'sortable-ghost',
+                    dragClass: 'sortable-drag',
+                    handle: '.sequence-handle',
+                    onStart: function(evt) {
+                        evt.item.classList.add('dragging');
+                    },
+                    onEnd: function(evt) {
+                        evt.item.classList.remove('dragging');
+                        
+                        // Update sequence order
+                        try {
+                            const sequence = Array.from(evt.to.children)
+                                .filter(item => item.dataset && item.dataset.elementId)
+                                .map(item => item.dataset.elementId);
+                            
+                            if (sequence.length > 0 && StateManager && typeof StateManager.setSlideSequence === 'function') {
+                                StateManager.setSlideSequence(sequence);
+                                console.log("Sequence updated:", sequence);
+                            }
+                        } catch (error) {
+                            console.error("Error updating sequence:", error);
+                        }
+                    }
+                });
+                
+                // Initial render
+                updateSequenceList();
+                console.log("Sequence list initialized successfully");
             } catch (error) {
-                 console.error("Background upload failed:", error);
-                 Utils.showError(`Background upload failed: ${error.message}`);
+                console.error("Error initializing sequence list:", error);
+                setTimeout(_initSequenceList, 500); // Retry after a delay
+            }
+        }
+        
+        /**
+         * Handle new project creation
+         */
+        function handleNewProject() {
+            // Check for unsaved changes
+            if (StateManager && typeof StateManager.isDirty === 'function' && 
+                StateManager.isDirty() && 
+                !confirm("You have unsaved changes. Are you sure you want to start a new project?")) {
+                return;
+            }
+            
+            // Create new project
+            if (StateManager && typeof StateManager.init === 'function') {
+                StateManager.init(true); // Re-initialize state with editor mode
+                
+                // Load default slide
+                if (CanvasController && typeof CanvasController.loadSlide === 'function' &&
+                    typeof StateManager.getCurrentSlide === 'function') {
+                    CanvasController.loadSlide(StateManager.getCurrentSlide());
+                }
+                
+                // Update UI
+                updateSlideList();
+                updateSequenceList();
+                updatePropertiesPanel(null);
+                updateProjectTitleDisplay();
+                updateSaveStatus(true);
+            }
+        }
+        
+        /**
+         * Handle save project
+         */
+        async function handleSaveProject() {
+            // Check if we have a valid project
+            if (!StateManager || !StateManager.getCurrentProject()) {
+                Utils.showError("No project to save");
+                return;
+            }
+            
+            try {
+                // Ensure current canvas state is saved
+                const activeObj = CanvasController.getCanvas()?.getActiveObject();
+                if (activeObj && activeObj.id) {
+                    _savePropertiesFromUI(activeObj.id);
+                }
+                
+                // Get project data
+                const project = StateManager.getCurrentProject();
+                const jsonString = StateManager.getProjectJsonString();
+                
+                // Save project
+                Utils.showLoadingIndicator(true, "Saving project...");
+                const result = await ServerClient.saveProject(jsonString, project.projectId, project.title);
+                
+                // Update project state
+                if (typeof StateManager.markAsSaved === 'function') {
+                    StateManager.markAsSaved(result.projectId, result.lastModified);
+                }
+                
+                Utils.showSuccess("Project saved successfully!");
+                console.log("Project saved:", result);
+            } catch (error) {
+                console.error("Save failed:", error);
+                Utils.showError(`Save failed: ${error.message}`);
+                updateSaveStatus(true); // Still dirty if save failed
             } finally {
                 Utils.showLoadingIndicator(false);
-                 event.target.value = null; // Reset file input
             }
-        };
-        reader.onerror = (e) => {
-            Utils.showLoadingIndicator(false);
-            Utils.showError("Failed to read image file.");
-            event.target.value = null; // Reset file input
-        };
-        reader.readAsDataURL(file);
-    }
-
-
-    // --- UI Rendering ---
-
-    function renderLoadProjectList(projects) {
-         if (!projects || projects.length === 0) {
-             loadProjectListContainer.innerHTML = '<p>No projects found.</p>';
-             return;
-         }
-         const listHtml = `
-            <ul>
-                ${projects.map(p => `
-                    <li onclick="EditorUI.handleLoadProject('${p.id}')">
-                        <span class="project-title">${p.title || 'Untitled'}</span>
-                        <span class="project-date">Modified: ${new Date(p.lastModified).toLocaleDateString()}</span>
-                    </li>
-                `).join('')}
-            </ul>
-         `;
-         loadProjectListContainer.innerHTML = listHtml;
-    }
-
-    function updateSlideList() {
-         if (!slideListContainer) return;
-         const slides = StateManager.getSlides();
-         const currentId = StateManager.getCurrentSlideId();
-         slideListContainer.innerHTML = slides.map((slide, index) => `
-            <li data-slide-id="${slide.slideId}" class="${slide.slideId === currentId ? 'active' : ''}" onclick="EditorUI.selectSlide('${slide.slideId}')">
-                <!-- Add thumbnail later if possible -->
-                <!-- <img src="placeholder.png" class="thumbnail"> -->
-                <span>${index + 1}. ${slide.title || 'Untitled Slide'}</span>
-            </li>
-         `).join('');
-
-         // Enable/disable delete button
-         const deleteBtn = document.getElementById('delete-slide-button');
-         if(deleteBtn) deleteBtn.disabled = slides.length <= 1;
-    }
-
-    function updateSlideBackgroundDisplay(fileId = null, filename = null) {
-         if (!currentSlideBgFilenameDisplay) return;
-         const slide = StateManager.getCurrentSlide();
-         if (!slide) return;
-
-         const currentFileId = fileId ?? slide.imageFileId; // Use passed ID or state ID
-
-         if (currentFileId) {
-             // Attempt to get a filename if not provided
-             if (!filename) {
-                 // Maybe store filename in slide data? For now, use ID.
-                 filename = `Image ID: ${currentFileId}`;
-             }
-             currentSlideBgFilenameDisplay.textContent = filename;
-             currentSlideBgFilenameDisplay.title = filename; // Tooltip for long names
-         } else {
-            currentSlideBgFilenameDisplay.textContent = "No background image set";
-            currentSlideBgFilenameDisplay.title = "";
-         }
-    }
-
-    function selectSlide(slideId) {
-        if (slideId === StateManager.getCurrentSlideId()) return; // No change
-        StateManager.setCurrentSlideId(slideId);
-        CanvasController.loadSlide(StateManager.getCurrentSlide());
-        updateSlideList(); // Re-render list to show active state
-        updateSequenceList(); // Update sequence for the new slide
-        updatePropertiesPanel(null); // Clear properties panel
-        updateSlideBackgroundDisplay(); // Update background info display
-    }
-
-    function updateSequenceList() {
-        if (!sequenceListContainer) return;
-        const slide = StateManager.getCurrentSlide();
-        const sequence = slide?.sequence || [];
-        const elements = slide?.elements || [];
-
-        if (sequence.length === 0) {
-            sequenceListContainer.innerHTML = '<li class="placeholder-item">No elements in sequence. Add elements and enable interactions.</li>';
-            return;
         }
-
-        sequenceListContainer.innerHTML = sequence.map(elementId => {
-            const element = elements.find(el => el.id === elementId);
-            const nickname = element?.nickname || elementId;
-            const type = element?.type || 'Unknown';
-             // Check if element actually exists - might be orphaned ID
-            if (!element) {
-                 return `<li data-element-id="${elementId}" class="orphaned">
-                            <span class="element-nickname">⚠ Orphaned ID: ${elementId}</span>
-                            <button class="remove-orphan-btn" onclick="EditorUI.removeOrphanFromSequence('${elementId}')">Remove</button>
-                        </li>`;
-            }
-            return `<li data-element-id="${elementId}">
-                        <span class="element-nickname">${nickname}</span>
-                        <span class="element-type">(${type})</span>
-                    </li>`;
-        }).join('');
-    }
-
-    function removeOrphanFromSequence(elementId) {
-        if (confirm(`Remove orphaned ID "${elementId}" from sequence?`)) {
-            const currentSequence = StateManager.getSlideSequence();
-            const newSequence = currentSequence.filter(id => id !== elementId);
-            StateManager.setSlideSequence(newSequence);
-            updateSequenceList(); // Re-render the list
-        }
-    }
-
-
-    function updatePropertiesPanel(fabricObject) {
-        if (!domRefs.propertiesPanel) return;
         
-        try {
-            // Clear existing panel content
-            domRefs.propertiesPanel.innerHTML = '';
+        /**
+         * Handle showing load modal
+         */
+        async function handleShowLoadModal() {
+            // Check for unsaved changes
+            if (StateManager && typeof StateManager.isDirty === 'function' && 
+                StateManager.isDirty() && 
+                !confirm("You have unsaved changes. Are you sure you want to load another project?")) {
+                return;
+            }
             
-            if (!fabricObject) {
-                domRefs.propertiesPanel.innerHTML = '<p class="no-selection">No element selected</p>';
+            // Get load modal
+            const loadModal = document.getElementById('load-project-modal');
+            const loadProjectListContainer = document.getElementById('load-project-list');
+            
+            if (!loadModal || !loadProjectListContainer) {
+                Utils.showError("Load modal not available");
                 return;
             }
-
-            const elementData = StateManager.getElementData(fabricObject.id);
-            if (!elementData) {
-                console.error('No state data found for selected object:', fabricObject.id);
+            
+            // Show modal
+            loadModal.classList.add('active');
+            loadProjectListContainer.innerHTML = '<p>Loading projects...</p>';
+            
+            try {
+                // Load projects
+                const projects = await ServerClient.listProjects();
+                renderLoadProjectList(projects, loadProjectListContainer);
+            } catch (error) {
+                console.error("Failed to list projects:", error);
+                loadProjectListContainer.innerHTML = `<p class="error-message">Error loading projects: ${error.message}</p>`;
+            }
+        }
+        
+        /**
+         * Close load modal
+         */
+        function closeLoadModal() {
+            const loadModal = document.getElementById('load-project-modal');
+            if (loadModal) {
+                loadModal.classList.remove('active');
+            }
+        }
+        
+        /**
+         * Handle loading a project
+         * @param {string} projectId - Project ID to load
+         */
+        async function handleLoadProject(projectId) {
+            closeLoadModal();
+            
+            if (!projectId) {
                 return;
             }
-
-            // Generate and append properties form
-            const form = generatePropertiesForm(elementData, fabricObject);
-            domRefs.propertiesPanel.appendChild(form);
-        } catch (error) {
-            console.error('Error updating properties panel:', error);
-            Utils.showError('Failed to update properties panel');
-        }
-    }
-
-    function _attachPropertiesPanelListeners(elementId) {
-         // Use event delegation? Or direct listeners? Direct might be simpler here.
-         // Debounce input listeners to avoid excessive updates
-         const debounceRate = 300; // ms
-         const debouncedSave = Utils.debounce(() => _savePropertiesFromUI(elementId), debounceRate);
-
-         // Identification
-         Utils.listen('#prop-nickname', 'input', debouncedSave);
-
-         // Transform
-         Utils.listen('#prop-left', 'input', debouncedSave);
-         Utils.listen('#prop-top', 'input', debouncedSave);
-         Utils.listen('#prop-width', 'input', debouncedSave);
-         Utils.listen('#prop-height', 'input', debouncedSave);
-         Utils.listen('#prop-angle', 'input', debouncedSave);
-
-         // Style
-         Utils.listen('#prop-style-color', 'input', debouncedSave);
-         Utils.listen('#prop-style-opacity', 'input', debouncedSave);
-         // Outline
-         Utils.listen('#prop-style-outlineEnabled', 'change', () => { _toggleFieldsetEnable('#prop-style-outlineEnabled', ['#prop-style-outlineColor', '#prop-style-outlineWidth']); debouncedSave(); });
-         Utils.listen('#prop-style-outlineColor', 'input', debouncedSave);
-         Utils.listen('#prop-style-outlineWidth', 'input', debouncedSave);
-         // Shadow
-          Utils.listen('#prop-style-shadowEnabled', 'change', () => { _toggleFieldsetEnable('#prop-style-shadowEnabled', ['#prop-style-shadowColor', '#prop-style-shadowBlur', '#prop-style-shadowOffsetX', '#prop-style-shadowOffsetY']); debouncedSave(); });
-         Utils.listen('#prop-style-shadowColor', 'input', debouncedSave);
-         Utils.listen('#prop-style-shadowBlur', 'input', debouncedSave);
-         Utils.listen('#prop-style-shadowOffsetX', 'input', debouncedSave);
-         Utils.listen('#prop-style-shadowOffsetY', 'input', debouncedSave);
-
-         // Text (if exists)
-          if (document.getElementById('prop-text-content')) {
-              Utils.listen('#prop-text-content', 'input', debouncedSave);
-              Utils.listen('#prop-text-fontSize', 'input', debouncedSave);
-              Utils.listen('#prop-text-fill', 'input', debouncedSave);
-          }
-
-          // Interactions
-          Utils.listen('#prop-trigger-onClick', 'change', debouncedSave);
-          // Features
-          Utils.listen('#prop-feature-revealEnabled', 'change', debouncedSave);
-          Utils.listen('#prop-feature-spotlightEnabled', 'change', debouncedSave);
-          Utils.listen('#prop-feature-panZoomEnabled', 'change', debouncedSave);
-          // Quiz Feature specific
-           Utils.listen('#prop-feature-quizEnabled', 'change', (e) => {
-                document.getElementById('quiz-config-section')?.classList.toggle('hidden', !e.target.checked);
-                debouncedSave();
-                updateSequenceList(); // Re-render sequence as quiz status affects display? maybe later
-           });
-          Utils.listen('#prop-quiz-feedbackTiming', 'change', (e) => {
-               document.getElementById('quiz-creator-email-group')?.classList.toggle('hidden', e.target.value !== 'emailCreator');
-               debouncedSave();
-          });
-          Utils.listen('#prop-quiz-creatorEmail', 'input', debouncedSave);
-          Utils.listen('#edit-quiz-content-button', 'click', () => {
-                const data = StateManager.getElementData(elementId);
-                if (data && data.interactions?.features?.quiz) {
-                    QuizEditor.open(data.interactions.features.quiz, elementId); // Pass quiz data and element ID
-                }
-          });
-
-          // Initial State
-          Utils.listen('#prop-initiallyHidden', 'change', debouncedSave);
-    }
-
-    // Helper to enable/disable fields based on a checkbox
-     function _toggleFieldsetEnable(checkboxSelector, fieldsToToggleSelectors) {
-        const isChecked = document.querySelector(checkboxSelector)?.checked;
-        fieldsToToggleSelectors.forEach(selector => {
-            const field = document.querySelector(selector);
-            if (field) field.disabled = !isChecked;
-        });
-     }
-
-    function _savePropertiesFromUI(elementId) {
-        const elementData = StateManager.getElementData(elementId);
-        if (!elementData) {
-            console.error(`Element data not found for ID: ${elementId}`);
-            return false;
-        }
-
-        try {
-            const updates = {
-                nickname: document.getElementById('prop-nickname')?.value || elementData.nickname,
-                left: parseFloat(document.getElementById('prop-left')?.value || elementData.left) || 0,
-                top: parseFloat(document.getElementById('prop-top')?.value || elementData.top) || 0,
-                width: parseFloat(document.getElementById('prop-width')?.value || elementData.width) || 100,
-                height: parseFloat(document.getElementById('prop-height')?.value || elementData.height) || 50,
-                angle: parseFloat(document.getElementById('prop-angle')?.value || elementData.angle) || 0,
-                initiallyHidden: document.getElementById('prop-initiallyHidden')?.checked || false,
+            
+            Utils.showLoadingIndicator(true, 'Loading Project...');
+            
+            try {
+                // Load project data
+                const jsonString = await ServerClient.loadProject(projectId);
                 
-                // Create a deep copy of nested objects to avoid reference issues
+                // Parse project data
+                if (StateManager && typeof StateManager.loadProjectData === 'function' && 
+                    StateManager.loadProjectData(jsonString)) {
+                    
+                    // Load first slide
+                    if (CanvasController && typeof CanvasController.loadSlide === 'function' &&
+                        typeof StateManager.getCurrentSlide === 'function') {
+                        CanvasController.loadSlide(StateManager.getCurrentSlide());
+                    }
+                    
+                    // Update UI
+                    updateSlideList();
+                    updateSequenceList();
+                    updatePropertiesPanel(null);
+                    updateProjectTitleDisplay();
+                    updateSaveStatus(false);
+                }
+            } catch (error) {
+                console.error("Load failed:", error);
+                Utils.showError(`Load failed: ${error.message}`);
+            } finally {
+                Utils.showLoadingIndicator(false);
+            }
+        }
+        
+        /**
+         * Add a new shape to the canvas
+         * @param {string} type - Shape type (rect, ellipse, textbox)
+         */
+        function addShape(type) {
+            // Get current slide
+            if (!StateManager || typeof StateManager.getCurrentSlide !== 'function') {
+                console.error("StateManager not available");
+                return;
+            }
+            
+            const slide = StateManager.getCurrentSlide();
+            if (!slide) {
+                return;
+            }
+            
+            // Create element data
+            const elementId = Utils.generateId('element-');
+            const elementData = {
+                type: type,
+                id: elementId,
+                left: 50, 
+                top: 50, 
+                width: (type === 'textbox' ? 150 : 100), 
+                height: (type === 'textbox' ? 40 : 50), 
+                angle: 0,
+                nickname: `${type.charAt(0).toUpperCase() + type.slice(1)} ${slide.elements.length + 1}`,
+                initiallyHidden: false,
+                
+                // Add default styles
                 style: {
-                    color: document.getElementById('prop-style-color')?.value || '#FFFFFF',
-                    opacity: parseFloat(document.getElementById('prop-style-opacity')?.value ?? 1.0),
-                    outlineEnabled: document.getElementById('prop-style-outlineEnabled')?.checked || false,
-                    outlineColor: document.getElementById('prop-style-outlineColor')?.value || '#000000',
-                    outlineWidth: parseInt(document.getElementById('prop-style-outlineWidth')?.value || 1),
-                    shadowEnabled: document.getElementById('prop-style-shadowEnabled')?.checked || false,
-                    shadowColor: document.getElementById('prop-style-shadowColor')?.value || '#000000',
-                    shadowBlur: parseInt(document.getElementById('prop-style-shadowBlur')?.value || 5),
-                    shadowOffsetX: parseInt(document.getElementById('prop-style-shadowOffsetX')?.value || 0),
-                    shadowOffsetY: parseInt(document.getElementById('prop-style-shadowOffsetY')?.value || 0),
+                    color: type === 'textbox' ? 'rgba(0,0,0,0)' : '#4285F4', // Transparent background for text
+                    opacity: 1,
+                    outlineEnabled: false,
+                    shadowEnabled: false,
                 },
                 
-                // Only update text properties for textbox elements
-                text: elementData.type === 'textbox' ? {
-                    content: document.getElementById('prop-text-content')?.value || '',
-                    fontSize: parseInt(document.getElementById('prop-text-fontSize')?.value || 16),
-                    fill: document.getElementById('prop-text-fill')?.value || '#333333',
-                } : elementData.text,
+                // Add text properties for textbox
+                text: type === 'textbox' ? {
+                    content: 'New Text',
+                    fontSize: 16,
+                    fill: '#333333'
+                } : null,
                 
-                // Keep nested structure consistent
+                // Default interactions
                 interactions: {
-                    triggers: {
-                        onClick: document.getElementById('prop-trigger-onClick')?.checked || false,
-                    },
+                    triggers: { onClick: false },
                     features: {
-                        // Create deep copies to avoid reference issues
-                        reveal: {
-                            enabled: document.getElementById('prop-feature-revealEnabled')?.checked || false,
-                            targetIds: elementData.interactions?.features?.reveal?.targetIds || [],
-                        },
-                        spotlight: {
-                            enabled: document.getElementById('prop-feature-spotlightEnabled')?.checked || false,
-                            type: elementData.interactions?.features?.spotlight?.type || 'circle',
-                        },
-                        panAndZoom: {
-                            enabled: document.getElementById('prop-feature-panZoomEnabled')?.checked || false,
-                            targetX: elementData.interactions?.features?.panAndZoom?.targetX || 0,
-                            targetY: elementData.interactions?.features?.panAndZoom?.targetY || 0,
-                            targetZoom: elementData.interactions?.features?.panAndZoom?.targetZoom || 1.5,
-                        },
-                        quiz: {
-                            // Preserve existing quiz data structure
-                            ...(elementData.interactions?.features?.quiz || { questions: [] }),
-                            enabled: document.getElementById('prop-feature-quizEnabled')?.checked || false,
-                            feedbackTiming: document.getElementById('prop-quiz-feedbackTiming')?.value || 'end',
-                            creatorEmail: document.getElementById('prop-quiz-creatorEmail')?.value || '',
-                        }
+                        reveal: { enabled: false, targetIds: [] },
+                        spotlight: { enabled: false, type: 'circle' },
+                        panAndZoom: { enabled: false, targetX: 0, targetY: 0, targetZoom: 1.5 },
+                        quiz: { enabled: false, feedbackTiming: 'end', creatorEmail: '', questions: [] }
                     }
                 }
             };
-
-            // Apply updates to StateManager
-            const success = StateManager.updateElementData(elementId, updates);
             
-            if (success) {
-                // Update the Fabric object to match the new state
-                CanvasController.updateObjectFromData(elementId);
+            // Add to state manager
+            if (typeof StateManager.addElementData === 'function') {
+                StateManager.addElementData(elementData);
+            }
+            
+            // Add to canvas
+            if (CanvasController && typeof CanvasController.addObject === 'function') {
+                const fabricObject = CanvasController.addObject(elementData);
                 
-                // Update sequence list for nickname changes
-                updateSequenceList();
-                
-                // Update quiz button text
-                const quizButton = document.getElementById('edit-quiz-content-button');
-                if (quizButton) {
-                    const qCount = updates.interactions.features.quiz.questions?.length || 0;
-                    quizButton.textContent = `Edit Quiz Content (${qCount} Qs)`;
+                // Select the new object
+                if (fabricObject && typeof CanvasController.setActiveObject === 'function') {
+                    CanvasController.setActiveObject(fabricObject.id);
+                }
+            }
+            
+            // Update sequence list
+            updateSequenceList();
+        }
+        
+        /**
+         * Handle adding a new slide
+         */
+        function handleAddSlide() {
+            if (!StateManager || typeof StateManager.addSlide !== 'function') {
+                console.error("StateManager.addSlide not available");
+                return;
+            }
+            
+            // Add new slide
+            const newSlideId = StateManager.addSlide();
+            
+            if (newSlideId) {
+                // Set as current slide
+                if (typeof StateManager.setCurrentSlideId === 'function') {
+                    StateManager.setCurrentSlideId(newSlideId);
                 }
                 
-                return true;
+                // Load slide onto canvas
+                if (CanvasController && typeof CanvasController.loadSlide === 'function' &&
+                    typeof StateManager.getCurrentSlide === 'function') {
+                    CanvasController.loadSlide(StateManager.getCurrentSlide());
+                }
+                
+                // Update UI
+                updateSlideList();
+                updateSequenceList();
+                updatePropertiesPanel(null);
+                updateSlideBackgroundDisplay();
             }
-            return false;
-        } catch (error) {
-            console.error(`Error saving properties for element ${elementId}:`, error);
-            Utils.showError(`Failed to save properties: ${error.message}`);
-            return false;
         }
-    }
-
-
-    function updateToolbarState(isObjectSelected) {
-        const deleteBtn = document.getElementById('delete-button');
-        if (deleteBtn) {
-            deleteBtn.disabled = !isObjectSelected;
+        
+        /**
+         * Handle deleting the current slide
+         */
+        function handleDeleteSlide() {
+            if (!StateManager || typeof StateManager.getCurrentSlide !== 'function') {
+                console.error("StateManager not available");
+                return;
+            }
+            
+            const slideToDelete = StateManager.getCurrentSlide();
+            if (!slideToDelete) {
+                return;
+            }
+            
+            // Confirm deletion
+            if (confirm(`Are you sure you want to delete slide "${slideToDelete.title || slideToDelete.slideId}"? This cannot be undone.`)) {
+                const currentId = slideToDelete.slideId;
+                
+                // Delete slide
+                if (typeof StateManager.deleteSlide === 'function' && StateManager.deleteSlide(currentId)) {
+                    // Load new current slide
+                    if (CanvasController && typeof CanvasController.loadSlide === 'function' &&
+                        typeof StateManager.getCurrentSlide === 'function') {
+                        CanvasController.loadSlide(StateManager.getCurrentSlide());
+                    }
+                    
+                    // Update UI
+                    updateSlideList();
+                    updateSequenceList();
+                    updatePropertiesPanel(null);
+                    updateSlideBackgroundDisplay();
+                }
+            }
         }
-        // Add logic for other buttons (e.g., group/ungroup) later
-    }
-
-    function updateSaveStatus(isDirty, lastModified = null) {
-        if (!saveStatusDisplay) return;
-        if (isDirty) {
-            saveStatusDisplay.textContent = '* Unsaved Changes';
-            saveStatusDisplay.style.color = 'orange';
-        } else {
-             const timestamp = lastModified ? `Saved: ${new Date(lastModified).toLocaleTimeString()}` : 'Saved';
-             saveStatusDisplay.textContent = timestamp;
-             saveStatusDisplay.style.color = 'var(--secondary-color)'; // Green
+        
+        /**
+         * Handle background image upload
+         * @param {Event} event - Change event from file input
+         */
+        async function handleBackgroundUpload(event) {
+            const file = event.target.files[0];
+            
+            // Validate file is an image
+            if (!file || !file.type.startsWith('image/')) {
+                Utils.showError("Please select a valid image file.");
+                return;
+            }
+            
+            Utils.showLoadingIndicator(true, 'Reading Image...');
+            
+            try {
+                // Read file as data URL
+                const dataUrl = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = e => resolve(e.target.result);
+                    reader.onerror = e => reject(e);
+                    reader.readAsDataURL(file);
+                });
+                
+                Utils.showLoadingIndicator(true, 'Uploading Image...');
+                
+                // Upload image
+                const result = await ServerClient.uploadImage(dataUrl, file.name);
+                
+                // Set as background
+                if (CanvasController && typeof CanvasController.setBackgroundImage === 'function') {
+                    await CanvasController.setBackgroundImage(result.fileId);
+                }
+                
+                // Update background display
+                updateSlideBackgroundDisplay(result.fileId, file.name);
+            } catch (error) {
+                console.error("Background upload failed:", error);
+                Utils.showError(`Background upload failed: ${error.message}`);
+            } finally {
+                Utils.showLoadingIndicator(false);
+                
+                // Reset file input
+                if (event.target) {
+                    event.target.value = null;
+                }
+            }
         }
-    }
-
-    function updateProjectTitleDisplay() {
-        if (projectTitleDisplay) {
-             projectTitleDisplay.textContent = StateManager.getProjectTitle() || 'Untitled Project';
-             // Optionally add ID if it exists:
-             // const projId = StateManager.getProjectId();
-             // if (projId) projectTitleDisplay.textContent += ` (${projId.substring(0, 6)}...)`;
+        
+        /**
+         * Render project list in load modal
+         * @param {Array} projects - List of projects
+         * @param {HTMLElement} container - Container element
+         */
+        function renderLoadProjectList(projects, container) {
+            if (!projects || !projects.length) {
+                container.innerHTML = '<p>No projects found.</p>';
+                return;
+            }
+            
+            // Create HTML list
+            const listHtml = `
+                <ul>
+                    ${projects.map(p => `
+                        <li data-project-id="${p.id}" class="load-project-item">
+                            <span class="project-title">${p.title || 'Untitled'}</span>
+                            <span class="project-date">Modified: ${new Date(p.lastModified).toLocaleDateString()}</span>
+                        </li>
+                    `).join('')}
+                </ul>
+            `;
+            
+            // Set container HTML
+            container.innerHTML = listHtml;
+            
+            // Add click handlers
+            const listItems = container.querySelectorAll('.load-project-item');
+            listItems.forEach(item => {
+                item.addEventListener('click', () => {
+                    const projectId = item.dataset.projectId;
+                    if (projectId) {
+                        handleLoadProject(projectId);
+                    }
+                });
+            });
         }
-    }
-
-    // --- Public API ---
-    return {
-      initEditorUI() {
-        _initDOMReferences();
-        _initToolbar();
-        _initSidebarTabs();
-        _initSlideNavigator();
-        _initSequenceList();
-        updatePropertiesPanel(null); // Initial state (no selection)
-        updateToolbarState(false);
-        updateProjectTitleDisplay();
-        updateSaveStatus(StateManager.isDirty()); // Initial save status
-        console.log("Editor UI Initialized.");
-      },
-      updatePropertiesPanel, // Expose for CanvasController
-      updateSequenceList,    // Expose for StateManager changes if needed
-      updateSlideList,       // Expose for StateManager changes
-      updateSlideBackgroundDisplay, // Expose for CanvasController
-      updateToolbarState, // Expose for CanvasController selection
-      updateSaveStatus, // Expose for StateManager/ServerClient
-      updateProjectTitleDisplay, // Expose for StateManager
-      selectSlide, // Allow selecting slide programmatically if needed
-      handleLoadProject, // Allow triggering load from modal list
-      closeLoadModal, // Allow closing modal
-      removeOrphanFromSequence // Expose for button click
-    };
-
-})();
-</script>
+        
+        /**
+         * Update slide list
+         */
+        function updateSlideList() {
+            const slideListContainer = document.getElementById('slide-list');
+            if (!slideListContainer) {
+                return;
+            }
+            
+            // Get slides and current slide ID
+            const slides = StateManager && typeof StateManager.getSlides === 'function' ? 
+                          StateManager.getSlides() : [];
+            const currentId = StateManager && typeof StateManager.getCurrentSlideId === 'function' ? 
+                             StateManager.getCurrentSlideId() : null;
+            
+            // Create list items
+            slideListContainer.innerHTML = slides.map((slide, index) => `
+                <li data-slide-id="${slide.slideId}" class="${slide.slideId === currentId ? 'active' : ''}" onclick="EditorUI.selectSlide('${slide.slideId}')">
+                    <span>${index + 1}. ${slide.title || 'Untitled Slide'}</span>
+                </li>
+            `).join('');
+            
+            // Update delete button state
+            const deleteBtn = document.getElementById('delete-slide-button');
+            if (deleteBtn) {
+                deleteBtn.disabled = slides.length <= 1;
+            }
+        }
+        
+        /**
+         * Update slide background display
+         * @param {string} fileId - Image file ID
+         * @param {string} filename - Image filename
+         */
+        function updateSlideBackgroundDisplay(fileId = null, filename = null) {
+            const bgDisplayElement = document.getElementById('current-bg-filename');
+            if (!bgDisplayElement) {
+                return;
+            }
+            
+            // Get current slide
+            const slide = StateManager && typeof StateManager.getCurrentSlide === 'function' ? 
+                         StateManager.getCurrentSlide() : null;
+            if (!slide) {
+                return;
+            }
+            
+            // Get file ID (use passed or from slide)
+            const currentFileId = fileId || slide.imageFileId;
+            
+            if (currentFileId) {
+                // Use filename if provided, otherwise use ID
+                bgDisplayElement.textContent = filename || `Image ID: ${currentFileId}`;
+                bgDisplayElement.title = bgDisplayElement.textContent; // Tooltip for long names
+            } else {
+                bgDisplayElement.textContent = "No background image";
+                bgDisplayElement.title = "";
+            }
+        }
+        
+        /**
+         * Select a slide
+         * @param {string} slideId - Slide ID
+         */
+        function selectSlide(slideId) {
+            if (!StateManager || !slideId) {
+                return;
+            }
+            
+            // Skip if already selected
+            if (typeof StateManager.getCurrentSlideId === 'function' && 
+                slideId === StateManager.getCurrentSlideId()) {
+                return;
+            }
+            
+            // Set as current slide
+            if (typeof StateManager.setCurrentSlideId === 'function') {
+                StateManager.setCurrentSlideId(slideId);
+            }
+            
+            // Load slide onto canvas
+            if (CanvasController && typeof CanvasController.loadSlide === 'function' &&
+                typeof StateManager.getCurrentSlide === 'function') {
+                CanvasController.loadSlide(StateManager.getCurrentSlide());
+            }
+            
+            // Update UI
+            updateSlideList();
+            updateSequenceList();
+            updatePropertiesPanel(null);
+            updateSlideBackgroundDisplay();
+        }
+        
+        /**
+         * Update sequence list
+         */
+        function updateSequenceList() {
+            if (!domRefs.sequenceList) {
+                return;
+            }
+            
+            // Get current slide and sequence
+            const slide = StateManager && typeof StateManager.getCurrentSlide === 'function' ? 
+                         StateManager.getCurrentSlide() : null;
+            const sequence = slide?.sequence || [];
+            const elements = slide?.elements || [];
+            
+            // Show placeholder if no sequence
+            if (sequence.length === 0) {
+                domRefs.sequenceList.innerHTML = '<li class="placeholder-item">No elements in sequence. Add elements and enable interactions.</li>';
+                return;
+            }
+            
+            // Create list items
+            domRefs.sequenceList.innerHTML = sequence.map(elementId => {
+                const element = elements.find(el => el.id === elementId);
+                
+                // Check if element exists
+                if (!element) {
+                    return `<li data-element-id="${elementId}" class="orphaned">
+                                <span class="sequence-handle">≡</span>
+                                <span class="element-nickname">⚠ Orphaned ID: ${elementId}</span>
+                                <button class="remove-orphan-btn" onclick="EditorUI.removeOrphanFromSequence('${elementId}')">Remove</button>
+                            </li>`;
+                }
+                
+                const nickname = element.nickname || 'Unnamed';
+                const type = element.type || 'Unknown';
+                
+                return `<li data-element-id="${elementId}">
+                            <span class="sequence-handle">≡</span>
+                            <span class="element-nickname">${nickname}</span>
+                            <span class="element-type">(${type})</span>
+                        </li>`;
+            }).join('');
+        }
+        
+        /**
+         * Remove orphaned ID from sequence
+         * @param {string} elementId - Element ID to remove
+         */
+        function removeOrphanFromSequence(elementId) {
+            if (confirm(`Remove orphaned ID "${elementId}" from sequence?`)) {
+                // Get current sequence
+                const currentSequence = StateManager && typeof StateManager.getSlideSequence === 'function' ? 
+                                      StateManager.getSlideSequence() : [];
+                
+                // Remove element ID
+                const newSequence = currentSequence.filter(id => id !== elementId);
+                
+                // Update sequence
+                if (StateManager && typeof StateManager.setSlideSequence === 'function') {
+                    StateManager.setSlideSequence(newSequence);
+                }
+                
+                // Update UI
+                updateSequenceList();
+            }
+        }
+        
+        /**
+         * Update properties panel for selected object
+         * @param {fabric.Object} fabricObject - Selected Fabric.js object
+         */
+        function updatePropertiesPanel(fabricObject) {
+            if (!domRefs.propertiesPanel) {
+                return;
+            }
+            
+            try {
+                // Clear existing content
+                domRefs.propertiesPanel.innerHTML = '';
+                
+                // Show placeholder if no selection
+                if (!fabricObject) {
+                    domRefs.propertiesPanel.innerHTML = '<p class="no-selection">No element selected</p>';
+                    return;
+                }
+                
+                // Get element data
+                const elementData = StateManager && typeof StateManager.getElementData === 'function' ? 
+                                  StateManager.getElementData(fabricObject.id) : null;
+                
+                if (!elementData) {
+                    console.error('No state data found for selected object:', fabricObject.id);
+                    return;
+                }
+                
+                // Generate properties form
+                const form = generatePropertiesForm(elementData, fabricObject);
+                domRefs.propertiesPanel.appendChild(form);
+                
+                // Attach event listeners
+                _attachPropertiesPanelListeners(fabricObject.id);
+            } catch (error) {
+                console.error('Error updating properties panel:', error);
+                if (typeof Utils !== 'undefined' && typeof Utils.showError === 'function') {
+                    Utils.showError('Failed to update properties panel');
+                }
+            }
+        }
+        
+        /**
+         * Generate properties form for element
+         * @param {Object} elementData - Element data
+         * @param {fabric.Object} fabricObject - Fabric.js object
+         * @return {HTMLElement} Form element
+         */
+        function generatePropertiesForm(elementData, fabricObject) {
+            const form = document.createElement('div');
+            form.className = 'properties-form';
+            
+            // Basic properties section
+            let html = `
+                <div class="property-section" id="basic-properties">
+                    <h3>Element Properties</h3>
+                    <div class="property-row">
+                        <label for="prop-nickname">Name:</label>
+                        <input type="text" id="prop-nickname" value="${elementData.nickname || ''}">
+                    </div>
+                    <div class="property-row">
+                        <label for="prop-left">X Position:</label>
+                        <input type="number" id="prop-left" value="${Math.round(elementData.left)}">
+                    </div>
+                    <div class="property-row">
+                        <label for="prop-top">Y Position:</label>
+                        <input type="number" id="prop-top" value="${Math.round(elementData.top)}">
+                    </div>
+                    <div class="property-row">
+                        <label for="prop-width">Width:</label>
+                        <input type="number" id="prop-width" value="${Math.round(elementData.width)}">
+                    </div>
+                    <div class="property-row">
+                        <label for="prop-height">Height:</label>
+                        <input type="number" id="prop-height" value="${Math.round(elementData.height)}">
+                    </div>
+                    <div class="property-row">
+                        <label for="prop-angle">Rotation:</label>
+                        <input type="number" id="prop-angle" value="${Math.round(elementData.angle || 0)}">
+                    </div>
+                </div>
+            `;
+            
+            // Style properties section
+            html += `
+                <div class="property-section" id="style-properties">
+                    <h3>Style</h3>
+                    <div class="property-row">
+                        <label for="prop-style-color">Fill Color:</label>
+                        <input type="color" id="prop-style-color" value="${elementData.style?.color || '#ff0000'}">
+                    </div>
+                    <div class="property-row">
+                        <label for="prop-style-opacity">Opacity:</label>
+                        <input type="range" id="prop-style-opacity" min="0" max="1" step="0.1" value="${elementData.style?.opacity !== undefined ? elementData.style.opacity : 1}">
+                    </div>
+                    
+                    <div class="property-group">
+                        <div class="property-row">
+                            <label>
+                                <input type="checkbox" id="prop-style-outlineEnabled" ${elementData.style?.outlineEnabled ? 'checked' : ''}>
+                                Enable Outline
+                            </label>
+                        </div>
+                        <div class="property-row">
+                            <label for="prop-style-outlineColor">Outline Color:</label>
+                            <input type="color" id="prop-style-outlineColor" value="${elementData.style?.outlineColor || '#000000'}" ${!elementData.style?.outlineEnabled ? 'disabled' : ''}>
+                        </div>
+                        <div class="property-row">
+                            <label for="prop-style-outlineWidth">Outline Width:</label>
+                            <input type="number" id="prop-style-outlineWidth" min="1" max="20" value="${elementData.style?.outlineWidth || 1}" ${!elementData.style?.outlineEnabled ? 'disabled' : ''}>
+                        </div>
+                    </div>
+                    
+                    <div class="property-group">
+                        <div class="property-row">
+                            <label>
+                                <input type="checkbox" id="prop-style-shadowEnabled" ${elementData.style?.shadowEnabled ? 'checked' : ''}>
+                                Enable Shadow
+                            </label>
+                        </div>
+                        <div class="property-row">
+                            <label for="prop-style-shadowColor">Shadow Color:</label>
+                            <input type="color" id="prop-style-shadowColor" value="${elementData.style?.shadowColor || '#000000'}" ${!elementData.style?.shadowEnabled ? 'disabled' : ''}>
+                        </div>
+                        <div class="property-row">
+                            <label for="prop-style-shadowBlur">Shadow Blur:</label>
+                            <input type="number" id="prop-style-shadowBlur" min="0" max="50" value="${elementData.style?.shadowBlur || 5}" ${!elementData.style?.shadowEnabled ? 'disabled' : ''}>
+                        </div>
+                        <div class="property-row">
+                            <label for="prop-style-shadowOffsetX">Shadow X Offset:</label>
+                            <input type="number" id="prop-style-shadowOffsetX" min="-50" max="50" value="${elementData.style?.shadowOffsetX || 0}" ${!elementData.style?.shadowEnabled ? 'disabled' : ''}>
+                        </div>
+                        <div class="property-row">
+                            <label for="prop-style-shadowOffsetY">Shadow Y Offset:</label>
+                            <input type="number" id="prop-style-shadowOffsetY" min="-50" max="50" value="${elementData.style?.shadowOffsetY || 0}" ${!elementData.style?.shadowEnabled ? 'disabled' : ''}>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Text properties section (for textbox elements)
+            if (elementData.type === 'textbox') {
+                html += `
+                    <div class="property-section" id="text-properties">
+                        <h3>Text</h3>
+                        <div class="property-row">
+                            <label for="prop-text-content">Content:</label>
+                            <textarea id="prop-text-content" rows="3">${elementData.text?.content || ''}</textarea>
+                        </div>
+                        <div class="property-row">
+                            <label for="prop-text-fontSize">Font Size:</label>
+                            <input type="number" id="prop-text-fontSize" min="8" max="72" value="${elementData.text?.fontSize || 16}">
+                        </div>
+                        <div class="property-row">
+                            <label for="prop-text-fill">Text Color:</label>
+                            <input type="color" id="prop-text-fill" value="${elementData.text?.fill || '#000000'}">
+                        </div>
+                        <div class="property-row">
+                            <button id="edit-text-advanced-button" class="secondary-button">Advanced Text Settings</button>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Interaction properties
+            html += `
+                <div class="property-section" id="interaction-properties">
+                    <h3>Interactions</h3>
+                    <div class="property-row">
+                        <label>
+                            <input type="checkbox" id="prop-trigger-onClick" ${elementData.interactions?.triggers?.onClick ? 'checked' : ''}>
+                            Clickable (Enable Interaction)
+                        </label>
+                    </div>
+                    
+                    <div class="property-group">
+                        <div class="property-row">
+                            <label>
+                                <input type="checkbox" id="prop-feature-revealEnabled" ${elementData.interactions?.features?.reveal?.enabled ? 'checked' : ''}>
+                                Reveal Elements on Click
+                            </label>
+                        </div>
+                        <div class="property-row">
+                            <button id="edit-reveal-targets-button" class="secondary-button" ${!elementData.interactions?.features?.reveal?.enabled ? 'disabled' : ''}>
+                                Edit Target Elements
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="property-group">
+                        <div class="property-row">
+                            <label>
+                                <input type="checkbox" id="prop-feature-spotlightEnabled" ${elementData.interactions?.features?.spotlight?.enabled ? 'checked' : ''}>
+                                Spotlight Effect on Click
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="property-group">
+                        <div class="property-row">
+                            <label>
+                                <input type="checkbox" id="prop-feature-panZoomEnabled" ${elementData.interactions?.features?.panAndZoom?.enabled ? 'checked' : ''}>
+                                Pan & Zoom on Click
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="property-group">
+                        <div class="property-row">
+                            <label>
+                                <input type="checkbox" id="prop-feature-quizEnabled" ${elementData.interactions?.features?.quiz?.enabled ? 'checked' : ''}>
+                                Launch Quiz on Click
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div id="quiz-config-section" class="property-group" ${!elementData.interactions?.features?.quiz?.enabled ? 'style="display: none;"' : ''}>
+                        <div class="property-row">
+                            <label for="prop-quiz-feedbackTiming">Quiz Feedback:</label>
+                            <select id="prop-quiz-feedbackTiming">
+                                <option value="none" ${elementData.interactions?.features?.quiz?.feedbackTiming === 'none' ? 'selected' : ''}>No Feedback</option>
+                                <option value="each" ${elementData.interactions?.features?.quiz?.feedbackTiming === 'each' ? 'selected' : ''}>After Each Question</option>
+                                <option value="end" ${elementData.interactions?.features?.quiz?.feedbackTiming === 'end' ? 'selected' : ''}>At End of Quiz</option>
+                                <option value="emailCreator" ${elementData.interactions?.features?.quiz?.feedbackTiming === 'emailCreator' ? 'selected' : ''}>Email Results to Creator</option>
+                                <option value="emailUser" ${elementData.interactions?.features?.quiz?.feedbackTiming === 'emailUser' ? 'selected' : ''}>Email Results to User</option>
+                            </select>
+                        </div>
+                        <div id="quiz-creator-email-group" class="property-row" ${elementData.interactions?.features?.quiz?.feedbackTiming !== 'emailCreator' ? 'style="display: none;"' : ''}>
+                            <label for="prop-quiz-creatorEmail">Creator Email:</label>
+                            <input type="email" id="prop-quiz-creatorEmail" value="${elementData.interactions?.features?.quiz?.creatorEmail || ''}">
+                        </div>
+                        <div class="property-row">
+                            <button id="edit-quiz-content-button" class="secondary-button">
+                                Edit Quiz Content (${elementData.interactions?.features?.quiz?.questions?.length || 0} Qs)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Initial state properties
+            html += `
+                <div class="property-section" id="initial-state-properties">
+                    <h3>Initial State</h3>
+                    <div class="property-row">
+                        <label>
+                            <input type="checkbox" id="prop-initiallyHidden" ${elementData.initiallyHidden ? 'checked' : ''}>
+                            Initially Hidden
+                        </label>
+                    </div>
+                </div>
+            `;
+            
+            // Set form content
+            form.innerHTML = html;
+            
+            // Set up advanced buttons
+            const textAdvancedButton = form.querySelector('#edit-text-advanced-button');
+            if (textAdvancedButton) {
+                textAdvancedButton.addEventListener('click', () => {
+                    if (typeof TextEditor !== 'undefined' && typeof TextEditor.open === 'function') {
+                        TextEditor.open(fabricObject);
+                    }
+                });
+            }
+            
+            const quizContentButton = form.querySelector('#edit-quiz-content-button');
+            if (quizContentButton) {
+                quizContentButton.addEventListener('click', () => {
+                    if (typeof QuizEditor !== 'undefined' && typeof QuizEditor.open === 'function') {
+                        const quizData = elementData.interactions?.features?.quiz;
+                        QuizEditor.open(quizData, elementData.id);
+                    }
+                });
+            }
+            
+            return form;
+        }
+        
+        /**
+         * Attach event listeners to properties panel
+         * @param {string} elementId - Element ID
+         */
+        function _attachPropertiesPanelListeners(elementId) {
+            // Debounce save function to avoid excessive updates
+            const debouncedSave = Utils.debounce(() => _savePropertiesFromUI(elementId), 300);
+            
+            // Identification
+            Utils.listen('#prop-nickname', 'input', debouncedSave);
+            
+            // Transform
+            Utils.listen('#prop-left', 'input', debouncedSave);
+            Utils.listen('#prop-top', 'input', debouncedSave);
+            Utils.listen('#prop-width', 'input', debouncedSave);
+            Utils.listen('#prop-height', 'input', debouncedSave);
+            Utils.listen('#prop-angle', 'input', debouncedSave);
+            
+            // Style
+            Utils.listen('#prop-style-color', 'input', debouncedSave);
+            Utils.listen('#prop-style-opacity', 'input', debouncedSave);
+            
+            // Outline
+            Utils.listen('#prop-style-outlineEnabled', 'change', () => { 
+                _toggleFieldsetEnable('#prop-style-outlineEnabled', 
+                    ['#prop-style-outlineColor', '#prop-style-outlineWidth']); 
+                debouncedSave(); 
+            });
+            Utils.listen('#prop-style-outlineColor', 'input', debouncedSave);
+            Utils.listen('#prop-style-outlineWidth', 'input', debouncedSave);
+            
+            // Shadow
+            Utils.listen('#prop-style-shadowEnabled', 'change', () => { 
+                _toggleFieldsetEnable('#prop-style-shadowEnabled', 
+                    ['#prop-style-shadowColor', '#prop-style-shadowBlur', 
+                     '#prop-style-shadowOffsetX', '#prop-style-shadowOffsetY']); 
+                debouncedSave(); 
+            });
+            Utils.listen('#prop-style-shadowColor', 'input', debouncedSave);
+            Utils.listen('#prop-style-shadowBlur', 'input', debouncedSave);
+            Utils.listen('#prop-style-shadowOffsetX', 'input', debouncedSave);
+            Utils.listen('#prop-style-shadowOffsetY', 'input', debouncedSave);
+            
+            // Text (if exists)
+            if (document.getElementById('prop-text-content')) {
+                Utils.listen('#prop-text-content', 'input', debouncedSave);
+                Utils.listen('#prop-text-fontSize', 'input', debouncedSave);
+                Utils.listen('#prop-text-fill', 'input', debouncedSave);
+            }
+            
+            // Interactions
+            Utils.listen('#prop-trigger-onClick', 'change', debouncedSave);
+            
+            // Features
+            Utils.listen('#prop-feature-revealEnabled', 'change', debouncedSave);
+            Utils.listen('#prop-feature-spotlightEnabled', 'change', debouncedSave);
+            Utils.listen('#prop-feature-panZoomEnabled', 'change', debouncedSave);
+            
+            // Quiz Feature specific
+            Utils.listen('#prop-feature-quizEnabled', 'change', (e) => {
+                document.getElementById('quiz-config-section')?.classList.toggle('hidden', !e.target.checked);
+                debouncedSave();
+            });
+            
+            Utils.listen('#prop-quiz-feedbackTiming', 'change', (e) => {
+                document.getElementById('quiz-creator-email-group')?.classList.toggle('hidden', 
+                    e.target.value !== 'emailCreator');
+                debouncedSave();
+            });
+            
+            Utils.listen('#prop-quiz-creatorEmail', 'input', debouncedSave);
+            
+            // Initial State
+            Utils.listen('#prop-initiallyHidden', 'change', debouncedSave);
+        }
+        
+        /**
+         * Toggle enabled state of fields based on checkbox
+         * @param {string} checkboxSelector - CSS selector for checkbox
+         * @param {Array} fieldsToToggleSelectors - Array of CSS selectors for fields
+         */
+        function _toggleFieldsetEnable(checkboxSelector, fieldsToToggleSelectors) {
+            const checkbox = document.querySelector(checkboxSelector);
+            if (!checkbox) return;
+            
+            const isChecked = checkbox.checked;
+            
+            fieldsToToggleSelectors.forEach(selector => {
+                const field = document.querySelector(selector);
+                if (field) {
+                    field.disabled = !isChecked;
+                }
+            });
+        }
+        
+        /**
+         * Save properties from UI to state
+         * @param {string} elementId - Element ID
+         * @return {boolean} Success
+         */
+        function _savePropertiesFromUI(elementId) {
+            // Get element data
+            const elementData = StateManager && typeof StateManager.getElementData === 'function' ? 
+                              StateManager.getElementData(elementId) : null;
+            
+            if (!elementData) {
+                console.error(`Element data not found for ID: ${elementId}`);
+                return false;
+            }
+            
+            try {
+                // Gather updates from form
+                const updates = {
+                    nickname: document.getElementById('prop-nickname')?.value || elementData.nickname,
+                    left: parseFloat(document.getElementById('prop-left')?.value || elementData.left) || 0,
+                    top: parseFloat(document.getElementById('prop-top')?.value || elementData.top) || 0,
+                    width: parseFloat(document.getElementById('prop-width')?.value || elementData.width) || 100,
+                    height: parseFloat(document.getElementById('prop-height')?.value || elementData.height) || 50,
+                    angle: parseFloat(document.getElementById('prop-angle')?.value || elementData.angle) || 0,
+                    initiallyHidden: document.getElementById('prop-initiallyHidden')?.checked || false,
+                    
+                    // Style properties
+                    style: {
+                        color: document.getElementById('prop-style-color')?.value || '#FFFFFF',
+                        opacity: parseFloat(document.getElementById('prop-style-opacity')?.value ?? 1.0),
+                        outlineEnabled: document.getElementById('prop-style-outlineEnabled')?.checked || false,
+                        outlineColor: document.getElementById('prop-style-outlineColor')?.value || '#000000',
+                        outlineWidth: parseInt(document.getElementById('prop-style-outlineWidth')?.value || 1),
+                        shadowEnabled: document.getElementById('prop-style-shadowEnabled')?.checked || false,
+                        shadowColor: document.getElementById('prop-style-shadowColor')?.value || '#000000',
+                        shadowBlur: parseInt(document.getElementById('prop-style-shadowBlur')?.value || 5),
+                        shadowOffsetX: parseInt(document.getElementById('prop-style-shadowOffsetX')?.value || 0),
+                        shadowOffsetY: parseInt(document.getElementById('prop-style-shadowOffsetY')?.value || 0),
+                    },
+                    
+                    // Text properties (if applicable)
+                    text: elementData.type === 'textbox' ? {
+                        content: document.getElementById('prop-text-content')?.value || '',
+                        fontSize: parseInt(document.getElementById('prop-text-fontSize')?.value || 16),
+                        fill: document.getElementById('prop-text-fill')?.value || '#333333',
+                    } : elementData.text,
+                    
+                    // Interaction properties
+                    interactions: {
+                        triggers: {
+                            onClick: document.getElementById('prop-trigger-onClick')?.checked || false,
+                        },
+                        features: {
+                            // Create deep copies to avoid reference issues
+                            reveal: {
+                                enabled: document.getElementById('prop-feature-revealEnabled')?.checked || false,
+                                targetIds: elementData.interactions?.features?.reveal?.targetIds || [],
+                            },
+                            spotlight: {
+                                enabled: document.getElementById('prop-feature-spotlightEnabled')?.checked || false,
+                                type: elementData.interactions?.features?.spotlight?.type || 'circle',
+                            },
+                            panAndZoom: {
+                                enabled: document.getElementById('prop-feature-panZoomEnabled')?.checked || false,
+                                targetX: elementData.interactions?.features?.panAndZoom?.targetX || 0,
+                                targetY: elementData.interactions?.features?.panAndZoom?.targetY || 0,
+                                targetZoom: elementData.interactions?.features?.panAndZoom?.targetZoom || 1.5,
+                            },
+                            quiz: {
+                                // Preserve existing quiz data structure
+                                ...(elementData.interactions?.features?.quiz || { questions: [] }),
+                                enabled: document.getElementById('prop-feature-quizEnabled')?.checked || false,
+                                feedbackTiming: document.getElementById('prop-quiz-feedbackTiming')?.value || 'end',
+                                creatorEmail: document.getElementById('prop-quiz-creatorEmail')?.value || '',
+                            }
+                        }
+                    }
+                };
+                
+                // Update element data
+                if (StateManager && typeof StateManager.updateElementData === 'function') {
+                    const success = StateManager.updateElementData(elementId, updates);
+                    
+                    if (success) {
+                        // Update canvas object
+                        if (CanvasController && typeof CanvasController.updateObjectFromData === 'function') {
+                            CanvasController.updateObjectFromData(elementId);
+                        }
+                        
+                        // Update sequence list for nickname changes
+                        updateSequenceList();
+                        
+                        // Update quiz button text
+                        const quizButton = document.getElementById('edit-quiz-content-button');
+                        if (quizButton) {
+                            const qCount = updates.interactions.features.quiz.questions?.length || 0;
+                            quizButton.textContent = `Edit Quiz Content (${qCount} Qs)`;
+                        }
+                        
+                        return true;
+                    }
+                }
+                
+                return false;
+            } catch (error) {
+                console.error(`Error saving properties for element ${elementId}:`, error);
+                if (typeof Utils !== 'undefined' && typeof Utils.showError === 'function') {
+                    Utils.showError(`Failed to save properties: ${error.message}`);
+                }
+                return false;
+            }
+        }
+        
+        /**
+         * Update toolbar state based on selection
+         * @param {boolean} isObjectSelected - Whether an object is selected
+         */
+        function updateToolbarState(isObjectSelected) {
+            if (domRefs.deleteButton) {
+                domRefs.deleteButton.disabled = !isObjectSelected;
+            }
+        }
+        
+        /**
+         * Update save status display
+         * @param {boolean} isDirty - Whether project has unsaved changes
+         * @param {number} lastModified - Last modified timestamp
+         */
+        function updateSaveStatus(isDirty, lastModified = null) {
+            const saveStatusDisplay = document.getElementById('save-status');
+            if (!saveStatusDisplay) return;
+            
+            if (isDirty) {
+                saveStatusDisplay.textContent = '* Unsaved Changes';
+                saveStatusDisplay.style.color = 'orange';
+            } else {
+                const timestamp = lastModified ? `Saved: ${new Date(lastModified).toLocaleTimeString()}` : 'Saved';
+                saveStatusDisplay.textContent = timestamp;
+                saveStatusDisplay.style.color = 'green'; // Using direct color instead of var
+            }
+        }
+        
+        /**
+         * Update project title display
+         */
+        function updateProjectTitleDisplay() {
+            const projectTitleDisplay = document.getElementById('project-title-display');
+            if (!projectTitleDisplay) return;
+            
+            const title = StateManager && typeof StateManager.getProjectTitle === 'function' ? 
+                         StateManager.getProjectTitle() : 'Untitled Project';
+            
+            projectTitleDisplay.textContent = title;
+        }
+        
+        // Public API
+        return {
+            initEditorUI,
+            updatePropertiesPanel,
+            updateSequenceList,
+            updateSlideList,
+            updateSlideBackgroundDisplay,
+            updateToolbarState,
+            updateSaveStatus,
+            updateProjectTitleDisplay,
+            selectSlide,
+            handleLoadProject,
+            closeLoadModal,
+            removeOrphanFromSequence
+        };
+    })();
+    </script>

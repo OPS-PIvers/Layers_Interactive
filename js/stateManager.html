@@ -16,6 +16,10 @@
       // View state (editor or viewer)
       let isEditorMode = true;
       
+      // Track whether project has unsaved changes
+      let projectDirty = false;
+      let lastSavedProjectData = null;
+      
       /**
        * Initialize state manager
        * @param {boolean} editorMode - Whether in editor mode
@@ -26,6 +30,8 @@
         currentSequenceIndex = -1;
         actionHistory = [];
         isEditorMode = editorMode;
+        projectDirty = false;
+        lastSavedProjectData = null;
         
         // Create empty project if in editor mode
         if (editorMode) {
@@ -48,6 +54,9 @@
         // Create initial slide
         const slideId = createSlide();
         setCurrentSlideId(slideId);
+        
+        // New project is dirty until saved for the first time
+        projectDirty = true;
       }
       
       /**
@@ -75,6 +84,7 @@
         }
         
         currentProject.slides.push(newSlide);
+        projectDirty = true;
         return slideId;
       }
       
@@ -97,6 +107,10 @@
           // Reset sequence index
           currentSequenceIndex = -1;
           actionHistory = [];
+          
+          // Store a copy of the loaded data to compare for dirty state
+          lastSavedProjectData = jsonString;
+          projectDirty = false;
           
           return true;
         } catch (error) {
@@ -123,12 +137,44 @@
       }
       
       /**
+       * Get project title
+       * @return {string} Project title
+       */
+      function getProjectTitle() {
+        return currentProject ? currentProject.title : 'Untitled Project';
+      }
+      
+      /**
+       * Get project ID
+       * @return {string} Project ID
+       */
+      function getProjectId() {
+        return currentProject ? currentProject.projectId : null;
+      }
+      
+      /**
        * Get current slide
        * @return {Object} Current slide
        */
       function getCurrentSlide() {
         if (!currentProject || !currentSlideId) return null;
         return currentProject.slides.find(s => s.slideId === currentSlideId);
+      }
+      
+      /**
+       * Get all slides
+       * @return {Array} All slides
+       */
+      function getSlides() {
+        return currentProject ? currentProject.slides : [];
+      }
+      
+      /**
+       * Get current slide ID
+       * @return {string} Current slide ID
+       */
+      function getCurrentSlideId() {
+        return currentSlideId;
       }
       
       /**
@@ -158,6 +204,7 @@
           ...properties
         };
         
+        projectDirty = true;
         return true;
       }
       
@@ -194,6 +241,7 @@
         
         // Add to slide elements
         slide.elements.push(newElement);
+        projectDirty = true;
         
         return elementId;
       }
@@ -213,6 +261,7 @@
         
         // Deep merge the objects (simple approach)
         slide.elements[elementIndex] = deepMerge(slide.elements[elementIndex], newData);
+        projectDirty = true;
         
         return true;
       }
@@ -272,6 +321,53 @@
           slide.overlayTimings = slide.overlayTimings.filter(timing => timing.elementId !== elementId);
         }
         
+        projectDirty = true;
+        return true;
+      }
+      
+      /**
+       * Add a slide
+       * @param {string} type - Slide type
+       * @return {string} New slide ID
+       */
+      function addSlide(type = 'image') {
+        if (!currentProject) return null;
+        
+        const slideId = createSlide(type);
+        projectDirty = true;
+        return slideId;
+      }
+      
+      /**
+       * Delete a slide
+       * @param {string} slideId - Slide ID to delete
+       * @return {boolean} Success
+       */
+      function deleteSlide(slideId) {
+        if (!currentProject || !slideId) return false;
+        
+        // Check if this is the only slide
+        if (currentProject.slides.length <= 1) {
+          Utils.showError("Cannot delete the only slide in the project.");
+          return false;
+        }
+        
+        // Find slide index
+        const slideIndex = currentProject.slides.findIndex(s => s.slideId === slideId);
+        if (slideIndex === -1) {
+          return false;
+        }
+        
+        // Remove slide
+        currentProject.slides.splice(slideIndex, 1);
+        
+        // If we deleted the current slide, set a new current slide
+        if (slideId === currentSlideId) {
+          const newIndex = Math.min(slideIndex, currentProject.slides.length - 1);
+          currentSlideId = currentProject.slides[newIndex].slideId;
+        }
+        
+        projectDirty = true;
         return true;
       }
       
@@ -294,6 +390,7 @@
         if (!slide) return false;
         
         slide.sequence = sequence;
+        projectDirty = true;
         return true;
       }
       
@@ -401,6 +498,7 @@
           });
         }
         
+        projectDirty = true;
         return true;
       }
       
@@ -414,6 +512,7 @@
         if (!slide || slide.slideType !== 'youtube' || !slide.overlayTimings) return false;
         
         slide.overlayTimings = slide.overlayTimings.filter(t => t.elementId !== elementId);
+        projectDirty = true;
         return true;
       }
       
@@ -428,6 +527,53 @@
         return slide.overlayTimings || [];
       }
       
+      /**
+       * Check if project has unsaved changes
+       * @return {boolean} Whether project has unsaved changes
+       */
+      function isDirty() {
+        if (!currentProject) return false;
+        
+        // If explicitly marked as dirty, return true
+        if (projectDirty) return true;
+        
+        // Compare with last saved version if available
+        if (lastSavedProjectData) {
+          const currentData = getProjectJsonString();
+          return currentData !== lastSavedProjectData;
+        }
+        
+        // No saved version, so consider dirty if we have a project
+        return true;
+      }
+      
+        /**
+         * Mark project as saved
+         * @param {string} projectId - Project ID
+         * @param {number} lastModified - Last modified timestamp
+         */
+        function markAsSaved(projectId, lastModified) {
+        if (!currentProject) return;
+        
+        // Update project metadata
+        currentProject.projectId = projectId;
+        currentProject.modifiedAt = lastModified;
+        
+        // Store current state to compare against for dirty checking
+        lastSavedProjectData = getProjectJsonString();
+        projectDirty = false;
+        
+        // Update UI if in editor mode
+        if (isEditorMode && typeof EditorUI !== 'undefined') {
+            if (typeof EditorUI.updateSaveStatus === 'function') {
+            EditorUI.updateSaveStatus(false, lastModified);
+            }
+            if (typeof EditorUI.updateProjectTitleDisplay === 'function') {
+            EditorUI.updateProjectTitleDisplay();
+            }
+        }
+        }
+      
       // Public API
       return {
         init,
@@ -436,13 +582,19 @@
         loadProjectData,
         getProjectJsonString,
         getCurrentProject,
+        getProjectTitle,
+        getProjectId,
         getCurrentSlide,
+        getSlides,
+        getCurrentSlideId,
         setCurrentSlideId,
         updateSlideProperties,
         getElementData,
         addElementData,
         updateElementData,
         removeElementData,
+        addSlide,
+        deleteSlide,
         getSlideSequence,
         setSlideSequence,
         getCurrentSequenceIndex,
@@ -454,7 +606,9 @@
         captureStateSnapshot,
         addOverlayTiming,
         removeOverlayTiming,
-        getOverlayTimings
+        getOverlayTimings,
+        isDirty,
+        markAsSaved
       };
     })();
     </script>

@@ -7,62 +7,61 @@
         function initializeApp(mode, projectId) {
             try {
                 console.log(`Initializing app in ${mode || 'default'} mode${projectId ? ' with project: ' + projectId : ''}`);
-                // Check for required DOM elements
-                const editorCanvas = document.getElementById('editor-canvas');
-                const viewerCanvas = document.getElementById('viewer-canvas');
                 
-                // Different required elements based on mode
-                let requiredElements = [
-                    'loading-indicator', 
-                    'message-modal'
-                ];
-                
-                // Add mode-specific required elements
-                if (mode === 'editor' || editorCanvas) {
-                    requiredElements = requiredElements.concat([
-                        'properties-panel',
-                        'toolbar',
-                        'slide-navigator',
-                        'sequence-list'
-                    ]);
+                // First ensure all core modules are available
+                if (typeof StateManager === 'undefined' || 
+                    typeof Utils === 'undefined' ||
+                    typeof CanvasController === 'undefined') {
+                    throw new Error('Core modules not loaded yet. Retrying...');
                 }
-    
-                const missingElements = requiredElements.filter(id => !document.getElementById(id));
                 
-                if (missingElements.length > 0) {
-                    throw new Error(`Missing required elements: ${missingElements.join(', ')}`);
-                }
-    
-                // Initialize modules in correct order
-                // REMOVED: Utils.init() - this function doesn't exist
+                // Initialize state management first
+                StateManager.init(mode === 'editor');
                 
-                // Initialize state management
-                StateManager.init();
-                
-                // Initialize canvas controllers
-                if (mode === 'editor' || editorCanvas) {
+                // Different initialization for editor vs. viewer mode
+                if (mode === 'editor') {
                     console.log("Initializing editor components");
+                    
+                    // Make sure we have the canvas element
+                    const editorCanvas = document.getElementById('editor-canvas');
+                    if (!editorCanvas) {
+                        throw new Error('Editor canvas element not found');
+                    }
+                    
+                    // Initialize canvas controller
                     CanvasController.initCanvas('editor-canvas', true);
                     
-                    // Check if EditorUI has init method before calling
-                    if (typeof EditorUI.init === 'function') {
-                        EditorUI.init();
-                    } else if (typeof EditorUI.initEditorUI === 'function') {
-                        EditorUI.initEditorUI(); // Alternative method name found in EditorUI
+                    // Initialize UI components
+                    if (typeof EditorUI !== 'undefined' && typeof EditorUI.initEditorUI === 'function') {
+                        EditorUI.initEditorUI();
+                    } else {
+                        throw new Error('EditorUI module not properly loaded');
                     }
                     
-                    // Check if QuizEditor has init method
-                    if (typeof QuizEditor.initQuizEditor === 'function') {
-                        QuizEditor.initQuizEditor();
+                    // Initialize other editor components if needed
+                    if (typeof FontLoader !== 'undefined' && typeof FontLoader.init === 'function') {
+                        FontLoader.init();
                     }
-                } else if (mode === 'viewer' || viewerCanvas) {
+                    
+                    if (typeof InteractionHandler !== 'undefined' && typeof InteractionHandler.init === 'function') {
+                        InteractionHandler.init('editor');
+                    }
+                    
+                } else if (mode === 'viewer') {
                     console.log("Initializing viewer components");
-                    CanvasController.initCanvas('viewer-canvas', false);
-                    InteractionHandler.init('viewer');
                     
-                    // Check if QuizPlayer has init method
-                    if (typeof QuizPlayer.init === 'function') {
-                        QuizPlayer.init();
+                    // Make sure we have the canvas element
+                    const viewerCanvas = document.getElementById('viewer-canvas');
+                    if (!viewerCanvas) {
+                        throw new Error('Viewer canvas element not found');
+                    }
+                    
+                    // Initialize canvas controller
+                    CanvasController.initCanvas('viewer-canvas', false);
+                    
+                    // Initialize interaction handler for viewer mode
+                    if (typeof InteractionHandler !== 'undefined') {
+                        InteractionHandler.init('viewer');
                     }
                     
                     // Load project if projectId is provided
@@ -72,15 +71,7 @@
                 } else {
                     throw new Error("Could not determine application mode");
                 }
-    
-                // Load initial content if available (for editor)
-                if (!projectId && mode === 'editor') {
-                    const initialData = window.INITIAL_DATA || null;
-                    if (initialData) {
-                        StateManager.loadProject(initialData);
-                    }
-                }
-    
+                
                 console.log('Application initialized successfully');
                 
             } catch (error) {
@@ -91,11 +82,11 @@
                     console.log(`Retrying initialization in 100ms (attempt ${initAttempts}/${maxAttempts})`);
                     setTimeout(() => initializeApp(mode, projectId), 100);
                 } else {
-                    // Use the proper error function without requiring Utils.init
-                    if (typeof Utils.showError === 'function') {
-                        Utils.showError('Failed to initialize application. Please refresh the page.');
+                    // Use the proper error function if available
+                    if (typeof Utils !== 'undefined' && typeof Utils.showError === 'function') {
+                        Utils.showError('Failed to initialize application after multiple attempts. Please refresh the page.');
                     } else {
-                        console.error('Failed to initialize application. Please refresh the page.');
+                        alert('Failed to initialize application. Please refresh the page.');
                     }
                 }
             }
@@ -104,10 +95,16 @@
         // Function to load a project for the viewer
         async function loadViewerProject(projectId) {
             console.log("Loading project for viewer:", projectId);
-            Utils.showLoadingIndicator(true, 'Loading Project...');
             
             try {
+                // Show loading indicator if Utils is available
+                if (typeof Utils !== 'undefined') {
+                    Utils.showLoadingIndicator(true, 'Loading Project...');
+                }
+                
+                // Load project data
                 const jsonString = await ServerClient.loadProject(projectId);
+                
                 if (StateManager.loadProjectData(jsonString)) {
                     // Load the first slide
                     const slide = StateManager.getCurrentSlide();
@@ -116,10 +113,12 @@
                         console.log("Project loaded successfully in viewer mode");
                         
                         // Set up sequence if available
-                        if (typeof InteractionHandler.setupSequence === 'function') {
-                            InteractionHandler.setupSequence();
-                        } else if (typeof InteractionHandler.applyInitialSequenceState === 'function') {
-                            InteractionHandler.applyInitialSequenceState(); // Alternative method name from the code
+                        if (typeof InteractionHandler !== 'undefined') {
+                            if (typeof InteractionHandler.applyInitialSequenceState === 'function') {
+                                InteractionHandler.applyInitialSequenceState();
+                            } else if (typeof InteractionHandler.setupSequence === 'function') {
+                                InteractionHandler.setupSequence();
+                            }
                         }
                     }
                 } else {
@@ -127,23 +126,34 @@
                 }
             } catch (error) {
                 console.error("Failed to load project:", error);
-                Utils.showError(`Failed to load project: ${error.message}`);
+                
+                if (typeof Utils !== 'undefined') {
+                    Utils.showError(`Failed to load project: ${error.message}`);
+                } else {
+                    alert(`Failed to load project: ${error.message}`);
+                }
             } finally {
-                Utils.showLoadingIndicator(false);
+                // Hide loading indicator
+                if (typeof Utils !== 'undefined') {
+                    Utils.showLoadingIndicator(false);
+                }
             }
         }
     
-        // initializeApp will be called by the specific HTML page
+        // Make initialization function available globally
         window.initializeApp = initializeApp;
     });
     
-    // Optional: Add beforeunload listener for editor to warn about unsaved changes
+    // Add beforeunload listener to warn about unsaved changes
     window.addEventListener('beforeunload', (event) => {
-        // Check if the current view is 'editor' (this requires a way to know the view mode globally)
-        // A simple check: presence of editor-specific elements
+        // Check if in editor mode and has unsaved changes
         const isEditorView = !!document.getElementById('editor-canvas');
-    
-        if (isEditorView && typeof StateManager.isDirty === 'function' && StateManager.isDirty()) {
+        
+        if (isEditorView && 
+            typeof StateManager !== 'undefined' && 
+            typeof StateManager.isDirty === 'function' && 
+            StateManager.isDirty()) {
+            
             const confirmationMessage = 'You have unsaved changes. Are you sure you want to leave?';
             event.returnValue = confirmationMessage; // Standard for most browsers
             return confirmationMessage; // For older browsers

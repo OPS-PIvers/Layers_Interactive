@@ -53,19 +53,20 @@
   <div id="loading-indicator" class="modal">Loading...</div>
   <div id="message-modal" class="modal"></div>
 
-  <!-- JS includes -->
+  <!-- JS includes - order matters! -->
   <?!= include('js/utils') ?>
   <?!= include('js/serverClient') ?>
   <?!= include('js/stateManager') ?>
   <?!= include('js/canvasController') ?>
-  <?!= include('js/editorUI') ?>
-  <?!= include('js/interactionHandler') ?>
-  <?!= include('js/animationController') ?>
   <?!= include('js/fontLoader') ?>
+  <?!= include('js/animationController') ?>
   <?!= include('js/textEditor') ?>
-  <?!= include('js/quizEditor') ?>
   <?!= include('js/youtubeManager') ?>
+  <?!= include('js/interactionHandler') ?>
+  <?!= include('js/quizEditor') ?>
+  <?!= include('js/quizPlayer') ?>
   <?!= include('js/timelineEditor') ?>
+  <?!= include('js/editorUI') ?>
   <?!= include('js/main') ?>
 
   <script>
