@@ -85,7 +85,7 @@
 
   <!-- JS includes - order matters! -->
   <script src="js/utils.js"></script>
-  <script src="js/serverClient.js"></script>
+  <script src="js/serverClient"></script>
   <script src="js/stateManager.js"></script>
   <script src="js/canvasController.js"></script>
   <script src="js/imageManager.js"></script>
@@ -101,7 +101,20 @@
   <script src="js/main.js"></script>
 
   <script>
-    document.addEventListener('DOMContentLoaded', () => initializeApp('editor'));
+    // This script runs *after* all included scripts have been parsed (if no errors)
+    document.addEventListener('DOMContentLoaded', () => {
+        // Check if initializeApp exists before calling
+        if (typeof initializeApp === 'function') {
+            initializeApp('editor');
+        } else {
+            console.error("Initialization function 'initializeApp' not found. Check script loading order and errors.");
+            // Optionally display an error to the user here
+             const body = document.querySelector('body');
+             if (body) {
+                 body.innerHTML = '<div style="padding: 20px; text-align: center; color: red; font-weight: bold;">Error: Application failed to load. Check the browser console for details.</div>';
+             }
+        }
+    });
   </script>
 
 </body>
