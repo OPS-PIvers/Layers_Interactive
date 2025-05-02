@@ -1,47 +1,11 @@
 /**
  * Handles canvas object animations
  */
-const AnimationController = (() => {
-  // Animation definitions with fallback easings in case Fabric.js isn't loaded yet
-  const getFabricEasing = () => {
-    // Check if fabric is defined
-    if (typeof fabric !== 'undefined' && fabric.util && fabric.util.ease) {
-      return {
-        easeInOutQuad: fabric.util.ease.easeInOutQuad,
-        easeOutCubic: fabric.util.ease.easeOutCubic,
-        easeInCubic: fabric.util.ease.easeInCubic,
-        easeInOutSine: fabric.util.ease.easeInOutSine
-      };
-    } else {
-      // Fallback easing functions if Fabric.js isn't loaded
-      console.warn("Fabric.js not loaded, using fallback easing functions");
-      return {
-        easeInOutQuad: (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2,
-        easeOutCubic: (t) => 1 - Math.pow(1 - t, 3),
-        easeInCubic: (t) => t * t * t,
-        easeInOutSine: (t) => -(Math.cos(Math.PI * t) - 1) / 2
-      };
-    }
-  };
-
-  // Get easing functions (will be updated when Fabric.js loads)
-  let easings = getFabricEasing();
-
-  // Update easings when document is fully loaded
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      // Try again after DOM is loaded
-      setTimeout(() => {
-        easings = getFabricEasing();
-      }, 500);
-    });
-  }
-
-  // Animation definitions
+const AnimationController = (function() {
+  // Animation definitions that can be initialized server-side
   const ANIMATIONS = {
     wiggle: {
       duration: 2000,
-      easing: (t) => easings.easeInOutQuad(t),
       loop: true,
       frames: [
         { angle: 0, delay: 0 },
@@ -52,7 +16,6 @@ const AnimationController = (() => {
     },
     shake: {
       duration: 1000,
-      easing: (t) => easings.easeInOutQuad(t),
       loop: true,
       frames: [
         { left: '+0', delay: 0 },
@@ -63,7 +26,6 @@ const AnimationController = (() => {
     },
     float: {
       duration: 3000,
-      easing: (t) => easings.easeInOutSine(t),
       loop: true,
       frames: [
         { top: '+0', delay: 0 },
@@ -73,7 +35,6 @@ const AnimationController = (() => {
     },
     pulse: {
       duration: 2000,
-      easing: (t) => easings.easeInOutQuad(t),
       loop: true,
       frames: [
         { scaleX: 1, scaleY: 1, delay: 0 },
@@ -83,7 +44,6 @@ const AnimationController = (() => {
     },
     fadeIn: {
       duration: 1000,
-      easing: (t) => easings.easeOutCubic(t),
       loop: false,
       frames: [
         { opacity: 0, delay: 0 },
@@ -92,7 +52,6 @@ const AnimationController = (() => {
     },
     fadeOut: {
       duration: 1000,
-      easing: (t) => easings.easeInCubic(t),
       loop: false,
       frames: [
         { opacity: 1, delay: 0 },
@@ -100,10 +59,33 @@ const AnimationController = (() => {
       ]
     }
   };
-    
+  
   // Track active animations
   const activeAnimations = new Map();
-
+  
+  // Apply easing functions at runtime in the browser
+  function initEasings() {
+    // Set easing functions when in browser environment
+    if (typeof fabric !== 'undefined' && fabric.util) {
+      Object.values(ANIMATIONS).forEach(anim => {
+        if (anim.duration === 1000) {
+          anim.easing = fabric.util.ease.easeInOutQuad;
+        } else if (anim.duration === 2000) {
+          anim.easing = fabric.util.ease.easeInOutQuad;
+        } else if (anim.duration === 3000) {
+          anim.easing = fabric.util.ease.easeInOutSine;
+        }
+        
+        // Special cases
+        if (anim === ANIMATIONS.fadeIn) {
+          anim.easing = fabric.util.ease.easeOutCubic;
+        } else if (anim === ANIMATIONS.fadeOut) {
+          anim.easing = fabric.util.ease.easeInCubic;
+        }
+      });
+    }
+  }
+  
   /**
    * Apply animation to a Fabric object
    * @param {fabric.Object} obj - Target object
@@ -112,6 +94,9 @@ const AnimationController = (() => {
    * @return {string} Animation ID
    */
   function applyAnimation(obj, animationType, options = {}) {
+    // Make sure easings are initialized
+    initEasings();
+    
     if (!obj || !ANIMATIONS[animationType]) return null;
     
     // Generate unique ID for this animation
@@ -190,29 +175,27 @@ const AnimationController = (() => {
               stopAnimation(obj, animationType);
             }
           },
-          easing: typeof animDef.easing === 'function' ? animDef.easing : easings.easeInOutQuad
+          easing: animDef.easing || ((t) => t)
         });
       } else {
-        // Fallback animation using requestAnimationFrame
-        console.warn("Using fallback animation without Fabric.js");
-        const startTime = Date.now();
-        const animate = () => {
-          const elapsed = Date.now() - startTime;
+        // Fallback - simple transition with no easing
+        let startTime = null;
+        
+        function step(timestamp) {
+          if (!startTime) startTime = timestamp;
+          const elapsed = timestamp - startTime;
           const progress = Math.min(1, elapsed / frame.delay);
-          const easing = typeof animDef.easing === 'function' ? animDef.easing(progress) : progress;
           
           Object.entries(props).forEach(([key, targetValue]) => {
             const startValue = obj[key];
             const diff = targetValue - startValue;
-            obj[key] = startValue + (diff * easing);
+            obj[key] = startValue + (diff * progress);
           });
           
-          if (obj.canvas) {
-            obj.canvas.renderAll();
-          }
+          obj.canvas.renderAll();
           
           if (progress < 1) {
-            animState.animationId = requestAnimationFrame(animate);
+            animState.animationId = requestAnimationFrame(step);
           } else {
             // Move to next frame
             currentFrameIndex = (currentFrameIndex + 1) % frames.length;
@@ -224,9 +207,9 @@ const AnimationController = (() => {
               stopAnimation(obj, animationType);
             }
           }
-        };
+        }
         
-        animState.animationId = requestAnimationFrame(animate);
+        animState.animationId = requestAnimationFrame(step);
       }
     }
     
@@ -313,6 +296,9 @@ const AnimationController = (() => {
    */
   function initializeCanvasAnimations(canvas) {
     if (!canvas) return;
+    
+    // Make sure easings are initialized
+    initEasings();
     
     canvas.getObjects().forEach(obj => {
       if (obj.visible) {
