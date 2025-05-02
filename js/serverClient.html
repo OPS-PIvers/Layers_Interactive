@@ -5,7 +5,7 @@
   const ServerClient = (() => {
     // Track pending requests to prevent duplicates
     const pendingRequests = new Map();
-    
+
     /**
      * Run a server function asynchronously
      * @param {string} functionName - Server function name
@@ -13,59 +13,60 @@
      * @return {Promise} Promise resolving to function result
      */
     function runAsync(functionName, ...args) {
-      return new Promise((resolve, reject) => {
-        const requestId = `${functionName}:${JSON.stringify(args)}`;
-        
-        // Check if this exact request is already pending
-        if (pendingRequests.has(requestId)) {
-          console.log(`Request already pending: ${requestId}`);
-          return pendingRequests.get(requestId);
-        }
-        
-        // Create a new promise
-        const promise = new Promise((innerResolve, innerReject) => {
-          Utils.showLoadingIndicator(true, `Processing ${functionName}...`);
-          
-          google.script.run
-            .withSuccessHandler(result => {
-              Utils.showLoadingIndicator(false);
-              // Remove from pending requests
-              pendingRequests.delete(requestId);
-              innerResolve(result);
-            })
-            .withFailureHandler(error => {
-              Utils.showLoadingIndicator(false);
-              console.error(`Error in ${functionName}:`, error);
-              // Remove from pending requests
-              pendingRequests.delete(requestId);
-              innerReject(error);
-            })
-            [functionName](...args);
-        });
-        
-        // Store the promise
-        pendingRequests.set(requestId, promise);
-        
-        // Return the promise
-        promise.then(resolve).catch(reject);
+      // Generate a unique key for the request based on function and args
+      // Note: Simple JSON.stringify might fail for complex objects or have key order issues.
+      // Consider a more robust hashing/serialization for production if needed.
+      const requestId = `${functionName}:${JSON.stringify(args)}`;
+
+      // Check if this exact request is already pending
+      if (pendingRequests.has(requestId)) {
+        console.log(`Request already pending: ${functionName}`);
+        // Return the existing promise
+        return pendingRequests.get(requestId);
+      }
+
+      // Create a new promise for this request
+      const promise = new Promise((resolve, reject) => {
+        // Show loading indicator using Utils if available
+        Utils?.showLoadingIndicator(true, `Processing ${functionName}...`);
+
+        google.script.run
+          .withSuccessHandler(result => {
+            Utils?.showLoadingIndicator(false);
+            pendingRequests.delete(requestId); // Remove from pending on success
+            resolve(result);
+          })
+          .withFailureHandler(error => {
+            Utils?.showLoadingIndicator(false);
+            console.error(`Error in ${functionName} (Args: ${JSON.stringify(args)}):`, error);
+            pendingRequests.delete(requestId); // Remove from pending on failure
+            reject(error); // Reject the promise with the error
+          })
+          [functionName](...args);
       });
+
+      // Store the promise in the pending map
+      pendingRequests.set(requestId, promise);
+
+      // Return the promise
+      return promise;
     }
-    
+
     /**
      * Save project data
      * @param {string} jsonString - Project data as JSON string
      * @param {string} projectId - Project ID (if updating)
      * @param {string} title - Project title
-     * @return {Promise} Promise resolving to save result
+     * @return {Promise<object>} Promise resolving to save result { projectId, lastModified }
      */
     function saveProject(jsonString, projectId, title) {
       return runAsync('saveProjectData', jsonString, projectId, title);
     }
-    
+
     /**
      * Load project data
      * @param {string} projectId - Project ID
-     * @return {Promise} Promise resolving to project JSON string
+     * @return {Promise<string>} Promise resolving to project JSON string
      */
     function loadProject(projectId) {
       if (!projectId) {
@@ -73,10 +74,10 @@
       }
       return runAsync('loadProjectData', projectId);
     }
-    
+
     /**
      * List all projects
-     * @return {Promise} Promise resolving to list of projects
+     * @return {Promise<Array<object>>} Promise resolving to list of projects metadata.
      */
     function listProjects() {
       return runAsync('listProjects');
@@ -85,7 +86,7 @@
     /**
      * Delete a project
      * @param {string} projectId - Project ID
-     * @return {Promise} Promise resolving to success status
+     * @return {Promise<boolean>} Promise resolving to success status
      */
     function deleteProject(projectId) {
       if (!projectId) {
@@ -95,182 +96,208 @@
     }
 
     /**
-     * Upload an image
+     * Upload an image to the specific project folder.
      * @param {string} dataUrl - Image data URL
      * @param {string} filename - Image filename
-     * @return {Promise} Promise resolving to upload result
+     * @param {string} projectId - The ID of the project to associate the image with.
+     * @return {Promise<object>} Promise resolving to upload result { fileId, fileUrl }
      */
-    function uploadImage(dataUrl, filename) {
+    function uploadImage(dataUrl, filename, projectId) {
       if (!dataUrl || !dataUrl.startsWith('data:')) {
         return Promise.reject(new Error('Invalid image data URL'));
       }
-      
-      if (!filename) {
-        filename = `image_${Date.now()}.png`;
+      if (!projectId) {
+          return Promise.reject(new Error('Project ID is required for uploading images.'));
       }
-      
-      return runAsync('saveImageFile', dataUrl, filename)
+
+      const safeFilename = filename || `image_${Date.now()}.png`;
+
+      // Pass projectId to the server-side function
+      return runAsync('saveImageFile', dataUrl, safeFilename, projectId)
         .then(result => {
-          if (!result || !result.fileId) {
-            throw new Error('Server returned invalid file ID');
+          if (!result || !result.fileId || !result.fileUrl) { // Check for both fileId and fileUrl
+            console.error("Server returned invalid result structure:", result);
+            throw new Error('Server did not return valid file ID and URL.');
           }
-          
-          console.log(`Image uploaded successfully with fileId: ${result.fileId}`);
-          return result;
+          console.log(`Image uploaded successfully: ID=${result.fileId}, URL=${result.fileUrl}`);
+          return result; // Contains { fileId, fileUrl }
         });
     }
-    
+
     /**
-     * Load an image
+     * Load an image using its file ID.
      * @param {string} fileId - Image file ID
-     * @return {Promise} Promise resolving to image data URL
+     * @return {Promise<string>} Promise resolving to image data URL
      */
     function loadImage(fileId) {
       if (!fileId) {
+        console.warn("loadImage called with null or empty fileId.");
         return Promise.reject(new Error('File ID is required'));
       }
-      
+
       // Create a cache key for this request
       const cacheKey = `image:${fileId}`;
-      
+
       // Check browser cache first (sessionStorage)
       if (window.sessionStorage) {
-        const cachedData = sessionStorage.getItem(cacheKey);
-        if (cachedData) {
-          console.log(`Using cached image data for fileId: ${fileId}`);
-          return Promise.resolve(cachedData);
+        try {
+            const cachedData = sessionStorage.getItem(cacheKey);
+            if (cachedData) {
+                console.log(`Using cached image data for fileId: ${fileId}`);
+                return Promise.resolve(cachedData);
+            }
+        } catch (e) {
+             console.warn("Session storage is unavailable or disabled.", e);
+             // Proceed without cache if sessionStorage fails
         }
       }
-      
+
+      // If not cached, fetch from server
       return runAsync('getImageDataUrl', fileId)
         .then(dataUrl => {
           if (!dataUrl || !dataUrl.startsWith('data:')) {
             throw new Error('Server returned invalid data URL');
           }
-          
-          // Cache the result in sessionStorage
+
+          // Cache the result in sessionStorage if available
           if (window.sessionStorage) {
             try {
               sessionStorage.setItem(cacheKey, dataUrl);
             } catch (error) {
-              console.warn('Failed to cache image data:', error);
-              // Ignore errors (storage might be full)
+              console.warn(`Failed to cache image data (might be storage limit): ${error}`);
+              // Ignore cache errors (e.g., storage full)
             }
           }
-          
+
           return dataUrl;
         })
         .catch(error => {
           console.error(`Failed to load image with fileId: ${fileId}`, error);
-          throw error;
+          // Attempt to clear potentially bad cache entry on specific errors
+          if (error.message && error.message.includes("File not found")) {
+              clearImageCache(fileId);
+          }
+          throw error; // Re-throw the original error
         });
     }
-    
+
     /**
      * Upload an audio file
      * @param {string} dataUrl - Audio data URL
      * @param {string} filename - Audio filename
-     * @return {Promise} Promise resolving to upload result
+     * @param {string} projectId - The ID of the project.
+     * @return {Promise<object>} Promise resolving to upload result { fileId, fileUrl }
      */
-    function uploadAudio(dataUrl, filename) {
+    function uploadAudio(dataUrl, filename, projectId) {
       if (!dataUrl || !dataUrl.startsWith('data:')) {
         return Promise.reject(new Error('Invalid audio data URL'));
       }
-      
-      if (!filename) {
-        filename = `audio_${Date.now()}.mp3`;
+      if (!projectId) {
+          return Promise.reject(new Error('Project ID is required for uploading audio.'));
       }
-      
-      return runAsync('saveAudioFile', dataUrl, filename)
+
+      const safeFilename = filename || `audio_${Date.now()}.mp3`;
+
+      // Pass projectId to the server-side function
+      return runAsync('saveAudioFile', dataUrl, safeFilename, projectId)
         .then(result => {
-          if (!result || !result.fileId) {
-            throw new Error('Server returned invalid file ID');
+           if (!result || !result.fileId || !result.fileUrl) { // Check for both fileId and fileUrl
+            console.error("Server returned invalid result structure for audio:", result);
+            throw new Error('Server did not return valid file ID and URL for audio.');
           }
-          
+          console.log(`Audio uploaded successfully: ID=${result.fileId}, URL=${result.fileUrl}`);
           return result;
         });
     }
-    
+
     /**
      * Load an audio file
      * @param {string} fileId - Audio file ID
-     * @return {Promise} Promise resolving to audio data URL
+     * @return {Promise<string>} Promise resolving to audio data URL
      */
     function loadAudio(fileId) {
       if (!fileId) {
-        return Promise.reject(new Error('File ID is required'));
+        return Promise.reject(new Error('File ID is required for audio'));
       }
-      
+
+      // Caching for audio might consume too much space quickly, so skipping for now.
+      // Consider implementing if audio files are small or re-used frequently.
+
       return runAsync('getAudioDataUrl', fileId)
         .then(dataUrl => {
           if (!dataUrl || !dataUrl.startsWith('data:')) {
-            throw new Error('Server returned invalid data URL');
+            throw new Error('Server returned invalid audio data URL');
           }
-          
           return dataUrl;
         });
     }
-    
+
     /**
      * Send quiz results to user
      * @param {Object} results - Quiz results
      * @param {string} userEmail - User email
-     * @return {Promise} Promise resolving to send result
+     * @return {Promise<void>} Promise resolving when email is sent
      */
     function sendQuizToUser(results, userEmail) {
       if (!results) {
         return Promise.reject(new Error('Quiz results are required'));
       }
-      
-      if (!userEmail || !userEmail.includes('@')) {
+
+      if (!userEmail || !/\S+@\S+\.\S+/.test(userEmail)) { // Basic email format check
         return Promise.reject(new Error('Valid email address is required'));
       }
-      
+
       return runAsync('sendQuizResultsToUser', results, userEmail);
     }
-    
+
     /**
      * Send quiz results to creator
      * @param {Object} results - Quiz results
      * @param {string} creatorEmail - Creator email
-     * @return {Promise} Promise resolving to send result
+     * @return {Promise<void>} Promise resolving when email is sent
      */
     function sendQuizToCreator(results, creatorEmail) {
       if (!results) {
         return Promise.reject(new Error('Quiz results are required'));
       }
-      
-      if (!creatorEmail || !creatorEmail.includes('@')) {
-        return Promise.reject(new Error('Valid email address is required'));
+
+      if (!creatorEmail || !/\S+@\S+\.\S+/.test(creatorEmail)) { // Basic email format check
+        return Promise.reject(new Error('Valid creator email address is required'));
       }
-      
+
       return runAsync('sendQuizResultsToCreator', results, creatorEmail);
     }
-    
+
     /**
      * Clear image cache for a specific fileId or all images
      * @param {string} fileId - Optional file ID to clear specific cache
      */
     function clearImageCache(fileId = null) {
       if (window.sessionStorage) {
-        if (fileId) {
-          // Clear specific image
-          sessionStorage.removeItem(`image:${fileId}`);
-        } else {
-          // Clear all cached images
-          const keysToRemove = [];
-          for (let i = 0; i < sessionStorage.length; i++) {
-            const key = sessionStorage.key(i);
-            if (key.startsWith('image:')) {
-              keysToRemove.push(key);
+         try {
+            if (fileId) {
+                // Clear specific image
+                const cacheKey = `image:${fileId}`;
+                sessionStorage.removeItem(cacheKey);
+                 console.log(`Cleared cache for image: ${fileId}`);
+            } else {
+                // Clear all cached images
+                const keysToRemove = [];
+                for (let i = 0; i < sessionStorage.length; i++) {
+                    const key = sessionStorage.key(i);
+                    if (key && key.startsWith('image:')) {
+                        keysToRemove.push(key);
+                    }
+                }
+                keysToRemove.forEach(key => sessionStorage.removeItem(key));
+                 console.log(`Cleared all (${keysToRemove.length}) cached images.`);
             }
-          }
-          
-          keysToRemove.forEach(key => sessionStorage.removeItem(key));
+        } catch (e) {
+             console.warn("Failed to clear session storage cache:", e);
         }
       }
     }
-    
+
     // Public API
     return {
       saveProject,
@@ -286,4 +313,4 @@
       clearImageCache
     };
   })();
-  </script>
+</script>
