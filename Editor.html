@@ -12,8 +12,8 @@
   <!-- Google Fonts API -->
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&family=Open+Sans:wght@400;700&family=Lato:wght@400;700&display=swap" rel="stylesheet">
   <!-- CSS includes -->
-  <link rel="stylesheet" href="css/styles.css">
-  <link rel="stylesheet" href="css/animations.css">
+  <?!= include('css/styles') ?>
+  <?!= include('css/animations') ?>
 </head>
 
 <body class="editor-view">
@@ -83,22 +83,22 @@
    <div id="quiz-results-modal" class="modal"></div> <!-- Added for testing Quiz Player -->
 
 
-  <!-- JS includes - order matters! -->
-  <script src="js/utils.js"></script>
-  <script src="js/serverClient.js"></script>
-  <script src="js/stateManager.js"></script>
-  <script src="js/canvasController.js"></script>
-  <script src="js/imageManager.js"></script>
-  <script src="js/fontLoader.js"></script>
-  <script src="js/animationController.js"></script>
-  <script src="js/textEditor.js"></script>
-  <script src="js/youtubeManager.js"></script>
-  <script src="js/interactionHandler.js"></script>
-  <script src="js/quizEditor.js"></script>
-  <script src="js/quizPlayer.js"></script>
-  <script src="js/timelineEditor.js"></script>
-  <script src="js/editorUI.js"></script>
-  <script src="js/main.js"></script>
+    <!-- JS includes - order matters! -->
+    <?!= include('js/utils') ?>
+    <?!= include('js/serverClient') ?>
+    <?!= include('js/stateManager') ?>
+    <?!= include('js/canvasController') ?>
+    <?!= include('js/imageManager') ?>
+    <?!= include('js/fontLoader') ?>
+    <?!= include('js/animationController') ?>
+    <?!= include('js/textEditor') ?>
+    <?!= include('js/youtubeManager') ?>
+    <?!= include('js/interactionHandler') ?>
+    <?!= include('js/quizEditor') ?>
+    <?!= include('js/quizPlayer') ?>
+    <?!= include('js/timelineEditor') ?>
+    <?!= include('js/editorUI') ?>
+    <?!= include('js/main') ?>
 
   <script>
     // This script runs *after* all included scripts have been parsed (if no errors)

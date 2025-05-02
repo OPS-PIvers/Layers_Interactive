@@ -42,7 +42,16 @@ function doGet(e) {
  */
 function include(filename) {
   try {
-    return HtmlService.createHtmlOutputFromFile(filename).getContent();
+    const content = HtmlService.createHtmlOutputFromFile(filename).getContent();
+    
+    // Add appropriate tags based on file type
+    if (filename.startsWith('js/')) {
+      return `<script>\n${content}\n</script>`;
+    } else if (filename.startsWith('css/')) {
+      return `<style>\n${content}\n</style>`;
+    } else {
+      return content;
+    }
   } catch (err) {
      Logger.log(`Error including file: ${filename}. Error: ${err}`);
      return `<!-- Error including ${filename}: ${err} -->`;
