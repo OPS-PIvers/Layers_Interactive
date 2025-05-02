@@ -1,4 +1,3 @@
-<script>
     /**
      * Editor UI Controller
      * Manages the editor interface, panels, and user interactions
@@ -1187,4 +1186,3 @@
             removeOrphanFromSequence
         };
     })();
-</script>

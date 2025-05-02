@@ -1,4 +1,3 @@
-<script>
     /**
      * Quiz player for presenting quizzes to users
      */
@@ -907,4 +906,3 @@
         closeQuiz
       };
     })();
-    </script>

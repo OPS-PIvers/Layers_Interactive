@@ -1,4 +1,3 @@
-<script>
 /**
  * Manages font loading and font list
  */
@@ -136,4 +135,3 @@ const FontLoader = (() => {
     updateFontSelectors
   };
 })();
-</script>

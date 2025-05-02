@@ -1,4 +1,3 @@
-<script>
     /**
      * Utility functions for the application
      */
@@ -219,4 +218,3 @@
         listen
       };
     })();
-    </script>

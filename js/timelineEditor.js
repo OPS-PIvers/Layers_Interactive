@@ -1,4 +1,3 @@
-<script>
     /**
      * Timeline editor for YouTube video overlays
      */
@@ -638,4 +637,3 @@
         close
       };
     })();
-    </script>

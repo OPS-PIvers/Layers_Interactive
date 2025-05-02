@@ -1,4 +1,3 @@
-<script>
     /**
      * Handles canvas object animations
      */
@@ -282,4 +281,3 @@
         getAnimationTypes: () => Object.keys(ANIMATIONS)
       };
     })();
-    </script>

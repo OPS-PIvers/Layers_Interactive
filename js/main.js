@@ -1,4 +1,3 @@
-<script>
     // Ensure proper initialization order
     document.addEventListener('DOMContentLoaded', () => {
         // Configuration
@@ -253,4 +252,3 @@
             return confirmationMessage; // For older browsers
         }
     });
-</script>

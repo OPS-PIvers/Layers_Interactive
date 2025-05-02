@@ -1,4 +1,3 @@
-<script>
     /**
      * Quiz editor for creating and managing quizzes
      */
@@ -990,4 +989,3 @@
         close
       };
     })();
-    </script>

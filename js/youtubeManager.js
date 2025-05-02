@@ -1,4 +1,3 @@
-<script>
     /**
      * YouTube video integration manager
      */
@@ -239,4 +238,3 @@
         getPlayer: () => player
       };
     })();
-    </script>

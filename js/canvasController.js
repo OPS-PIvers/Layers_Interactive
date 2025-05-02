@@ -1,4 +1,3 @@
-<script>
   /**
    * Controls canvas operations using Fabric.js
    */
@@ -871,4 +870,3 @@
       }
     };
   })();
-</script>

@@ -1,4 +1,3 @@
-<script>
   /**
    * Manages image uploads and additions to the canvas
    */
@@ -264,4 +263,3 @@
       processImageFile // Expose if needed for direct file processing (e.g., drag/drop)
     };
   })();
-</script>

@@ -1,4 +1,3 @@
-<script>
     /**
      * Main application initialization
      */
@@ -64,4 +63,3 @@
         Utils.showLoadingIndicator(false);
       }
     }
-    </script>

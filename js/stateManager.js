@@ -1,4 +1,3 @@
-<script>
   /**
    * Manages application state and data
    */
@@ -628,4 +627,3 @@
       markAsDirty // Expose if needed externally, but prefer modifying functions call it
     };
   })();
-</script>

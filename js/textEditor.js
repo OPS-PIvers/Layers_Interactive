@@ -1,4 +1,3 @@
-<script>
 /**
  * Text editor for overlay text
  */
@@ -331,4 +330,3 @@ const TextEditor = (() => {
     updateObjectTextDisplay
   };
 })();
-</script>

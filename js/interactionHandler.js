@@ -1,4 +1,3 @@
-<script>
     /**
      * Handles interactive features
      */
@@ -365,4 +364,3 @@
         updateNavUI
       };
     })();
-    </script>

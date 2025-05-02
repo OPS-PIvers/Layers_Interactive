@@ -1,4 +1,3 @@
-<script>
   /**
    * Client for server-side API calls
    */
@@ -320,4 +319,3 @@
       clearImageCache
     };
   })();
-</script>
