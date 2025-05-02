@@ -68,7 +68,7 @@ function getMasterProjectsFolder() {
     try {
       masterFolder = DriveApp.getFolderById(folderId);
       masterFolder.getName(); // Check accessibility
-      Logger.log(`Retrieved master projects folder by ID: ${masterFolder.getName()} (ID: ${folderId})`);
+      // Logger.log(`Retrieved master projects folder by ID: ${masterFolder.getName()} (ID: ${folderId})`); // Noisy
       return masterFolder; // Found and accessible
     } catch (e) {
       Logger.log(`Master folder with stored ID ${folderId} not found or inaccessible (${e.message}). Clearing ID and searching/creating.`);
@@ -162,13 +162,13 @@ function saveProjectData(projectJsonString, projectId, title) {
     projectData.projectId = effectiveProjectId; // Ensure ID is correct
     projectData.title = title || projectData.title || 'Untitled Project'; // Ensure title exists
     projectData.modifiedAt = timestamp;
-    if (isNewProject) {
-      projectData.createdAt = timestamp; // Set creation time only for new projects
+    if (isNewProject && !projectData.createdAt) { // Set createdAt only if new and not already set
+      projectData.createdAt = timestamp;
     }
 
     // 3. Handle Drive Folder (if enabled)
-    let projectFolderUrl = null;
-    if (DRIVE_STORAGE_ENABLED) {
+    let projectFolderUrl = projectData.projectFolderUrl || null; // Use existing if available
+    if (DRIVE_STORAGE_ENABLED && !projectFolderUrl) { // Only get/create if needed
        const projectFolder = getProjectFolder(effectiveProjectId); // Get or create folder
        projectFolderUrl = projectFolder.getUrl(); // Get its URL for metadata storage
        projectData.projectFolderUrl = projectFolderUrl; // Add to project data itself
@@ -180,13 +180,12 @@ function saveProjectData(projectJsonString, projectId, title) {
     // 5. Save Metadata (Spreadsheet, if enabled)
     let saveResult;
     if (SPREADSHEET_STORAGE_ENABLED) {
-        // Pass folder URL to spreadsheet manager
+        // Pass folder URL (which might be null if Drive is disabled)
        saveResult = saveProjectToSpreadsheet(updatedJsonString, effectiveProjectId, projectData.title, projectFolderUrl);
     } else {
         // If only Drive storage is used, we still need to return the expected structure
          saveResult = { projectId: effectiveProjectId, lastModified: timestamp };
         // TODO: Implement saving project JSON directly to Drive folder here if SPREADSHEET_STORAGE_ENABLED is false
-        // E.g., saveJsonToDrive(effectiveProjectId, updatedJsonString);
         Logger.log("Spreadsheet storage disabled. Project metadata not saved to sheet.");
         // throw new Error("Direct Drive JSON storage not yet implemented.");
     }
@@ -222,6 +221,11 @@ function loadProjectData(projectId) {
        throw new Error("Loading from Drive not yet implemented.");
     }
   } catch (e) {
+    // Check if the error is "Project sheets not found" and provide a clearer message
+    if (e.message && e.message.includes("Project sheets not found")) {
+        Logger.log(`Project sheets not found for ID: ${projectId}.`);
+        throw new Error(`Project not found (ID: ${projectId}). It may have been deleted or the ID is incorrect.`);
+    }
     Logger.log(`Error loading project data (ID: ${projectId}): ${e.message}\nStack: ${e.stack}`);
     throw new Error(`Failed to load project: ${e.message}`);
   }
@@ -234,7 +238,7 @@ function loadProjectData(projectId) {
 function listProjects() {
   try {
     if (SPREADSHEET_STORAGE_ENABLED) {
-       Logger.log("Listing projects from Spreadsheet.");
+       // Logger.log("Listing projects from Spreadsheet."); // Noisy
       return listProjectsFromSpreadsheet();
     } else {
       // TODO: Implement listing projects from Drive metadata/index file
@@ -266,10 +270,10 @@ function deleteProject(projectId) {
       try {
           const spreadsheetSuccess = deleteProjectFromSpreadsheet(projectId);
           Logger.log(`Spreadsheet deletion result for ${projectId}: ${spreadsheetSuccess}`);
-           // If index removal failed, consider it a failure
+           // Failure here is critical if spreadsheet is the main source
            if (!spreadsheetSuccess) {
                overallSuccess = false;
-               Logger.log(`Failed to remove project ${projectId} from spreadsheet index.`);
+               Logger.log(`Failed to complete spreadsheet deletion for project ${projectId}.`);
            }
       } catch (e) {
            Logger.log(`Error deleting project ${projectId} from spreadsheet: ${e.message}`);
@@ -278,6 +282,7 @@ function deleteProject(projectId) {
     }
 
     // 2. Delete Drive Folder (if enabled)
+    // Proceed even if spreadsheet deletion failed, to ensure cleanup
     if (DRIVE_STORAGE_ENABLED) {
        try {
             // Attempt to find the folder first. Don't create it if it doesn't exist.
@@ -293,16 +298,17 @@ function deleteProject(projectId) {
                     Logger.log(`Warning: Multiple folders found named ${projectFolderName} during deletion. Only the first was trashed.`);
                  }
             } else {
-                Logger.log(`Project folder '${projectFolderName}' for ${projectId} not found for deletion.`);
-                // This isn't necessarily an error if the folder was never created or already deleted.
+                Logger.log(`Project folder '${projectFolderName}' for ${projectId} not found for deletion (may have already been deleted or never existed).`);
+                // This isn't necessarily a failure state if the folder is just missing.
             }
        } catch (e) {
-            Logger.log(`Error deleting project folder for ${projectId}: ${e.message}`);
-            overallSuccess = false; // Drive deletion failed
+            Logger.log(`Error moving project folder for ${projectId} to trash: ${e.message}`);
+            // Don't necessarily mark overallSuccess as false here, as spreadsheet deletion might be primary.
+            // But log the error clearly.
        }
     }
 
-    // Return overall success status
+    // Return overall success status (primarily based on spreadsheet deletion success if enabled)
     Logger.log(`Overall deletion result for ${projectId}: ${overallSuccess}`);
     return overallSuccess;
 
@@ -339,32 +345,34 @@ function saveImageFile(dataUrl, filename, projectId) {
 
   try {
     const projectFolder = getProjectFolder(projectId); // Ensures folder exists
-    const { mimeType, data } = MimeUtils.decodeDataUrl(dataUrl); // Handles potential errors
+    const { mimeType, data, isBase64 } = MimeUtils.decodeDataUrl(dataUrl); // Handles potential errors & non-base64
+     if (!isBase64) { // Ensure data is base64 before decoding
+         throw new Error("Image data URL does not appear to be base64 encoded.");
+     }
     const blob = Utilities.newBlob(Utilities.base64Decode(data), mimeType, filename);
 
     // --- Filename Collision Handling ---
     let targetFilename = filename;
     let counter = 1;
-    // Loop while a file with the target name exists in the folder
     while (projectFolder.getFilesByName(targetFilename).hasNext()) {
       const nameParts = filename.split('.');
-      const extension = nameParts.length > 1 ? '.' + nameParts.pop() : ''; // Get extension safely
-      const baseName = nameParts.join('.'); // Get base name
-      targetFilename = `${baseName}_${counter}${extension}`; // Append counter
+      const extension = nameParts.length > 1 ? '.' + nameParts.pop() : '';
+      const baseName = nameParts.join('.');
+      targetFilename = `${baseName}_${counter}${extension}`;
       counter++;
-      if (counter > 100) { // Safety break to prevent infinite loops
+      if (counter > 100) {
            Logger.log(`Exceeded retry limit for unique filename for ${filename} in project ${projectId}`);
            throw new Error("Could not generate a unique filename after 100 attempts.");
       }
     }
     // --- End Collision Handling ---
 
-    const file = projectFolder.createFile(blob.setName(targetFilename)); // Set the final unique name
+    const file = projectFolder.createFile(blob.setName(targetFilename));
     const fileId = file.getId();
     const fileUrl = file.getUrl();
     Logger.log(`Image file saved: ${targetFilename} (ID: ${fileId}) in folder: ${projectFolder.getName()}`);
 
-    return { fileId, fileUrl }; // Return both ID and URL
+    return { fileId, fileUrl };
 
   } catch (e) {
     Logger.log(`Error saving image file '${filename}' for project ${projectId}: ${e.message}\nStack: ${e.stack}`);
@@ -391,16 +399,20 @@ function getImageDataUrl(fileId) {
   try {
     const file = DriveApp.getFileById(fileId); // Throws error if not found/accessible
     const blob = file.getBlob();
+    // Limit file size to prevent potential 'Exceeded maximum execution time' errors on large images
+    const MAX_BLOB_SIZE = 10 * 1024 * 1024; // 10 MB limit (adjust as needed)
+    if (blob.getBytes().length > MAX_BLOB_SIZE) {
+        Logger.log(`File ${fileId} size (${blob.getBytes().length} bytes) exceeds limit ${MAX_BLOB_SIZE}. Cannot generate data URL.`);
+        throw new Error(`Image file is too large (over ${MAX_BLOB_SIZE / 1024 / 1024}MB) to process.`);
+    }
     const dataUrl = MimeUtils.encodeDataUrl(blob);
     // Logger.log(`Retrieved data URL for file ID: ${fileId}`); // Can be noisy
     return dataUrl;
   } catch (e) {
     Logger.log(`Error getting image data URL for file ID ${fileId}: ${e.message}\nStack: ${e.stack}`);
-    // Check for specific "not found" errors which are common
-    if (e.message.includes("찾을 수 없습니다") || e.message.toLowerCase().includes("not found") || e.message.toLowerCase().includes("no item with id")) {
+    if (e.message && (e.message.includes("찾을 수 없습니다") || e.message.toLowerCase().includes("not found") || e.message.toLowerCase().includes("no item with id"))) {
        throw new Error(`File not found or access denied for ID: ${fileId}`);
     }
-    // Throw a generic error for other issues
     throw new Error(`Failed to get image data: ${e.message}`);
   }
 }
@@ -414,15 +426,15 @@ function getImageDataUrl(fileId) {
  * @throws {Error} If Drive storage is disabled, projectId is missing, or save fails.
  */
 function saveAudioFile(dataUrl, filename, projectId) {
-    Logger.log(`Attempting to save audio: ${filename} for project ${projectId}`);
+    // Logger.log(`Attempting to save audio: ${filename} for project ${projectId}`); // Noisy
     if (!DRIVE_STORAGE_ENABLED) throw new Error("Drive storage is not enabled.");
     if (!projectId) throw new Error("Project ID is required to save the audio file.");
     if (!dataUrl || !filename) throw new Error("Audio data URL and filename are required.");
 
-    // Actual implementation similar to saveImageFile
     try {
       const projectFolder = getProjectFolder(projectId);
-      const { mimeType, data } = MimeUtils.decodeDataUrl(dataUrl);
+      const { mimeType, data, isBase64 } = MimeUtils.decodeDataUrl(dataUrl);
+       if (!isBase64) { throw new Error("Audio data URL does not appear to be base64 encoded."); }
       const blob = Utilities.newBlob(Utilities.base64Decode(data), mimeType, filename);
 
       // Filename Collision Handling (same as image)
@@ -453,14 +465,18 @@ function saveAudioFile(dataUrl, filename, projectId) {
  * @throws {Error} If Drive storage is disabled, fileId is missing, or file access fails.
  */
 function getAudioDataUrl(fileId) {
-    Logger.log(`Attempting to get audio data URL for fileId ${fileId}`);
+    // Logger.log(`Attempting to get audio data URL for fileId ${fileId}`); // Noisy
     if (!DRIVE_STORAGE_ENABLED) throw new Error("Drive storage is not enabled.");
     if (!fileId) throw new Error("File ID is required to get audio data.");
 
-   // Actual implementation similar to getImageDataUrl
     try {
         const file = DriveApp.getFileById(fileId);
         const blob = file.getBlob();
+        const MAX_BLOB_SIZE = 20 * 1024 * 1024; // 20 MB limit for audio (adjust as needed)
+        if (blob.getBytes().length > MAX_BLOB_SIZE) {
+            Logger.log(`Audio file ${fileId} size (${blob.getBytes().length} bytes) exceeds limit ${MAX_BLOB_SIZE}. Cannot generate data URL.`);
+            throw new Error(`Audio file is too large (over ${MAX_BLOB_SIZE / 1024 / 1024}MB) to process.`);
+        }
         const dataUrl = MimeUtils.encodeDataUrl(blob);
         return dataUrl;
     } catch (e) {
@@ -472,8 +488,131 @@ function getAudioDataUrl(fileId) {
     }
 }
 
+// --- Migration Function ---
 
-// --- Email Functions --- (No changes needed for Phase 2)
+/**
+ * Migrates a project to use the new Drive folder structure.
+ * - Creates a project folder if it doesn't exist.
+ * - Moves existing files (images, audio, etc.) referenced by fileId into the project folder.
+ * - Updates element data with fileUrl.
+ * - Saves the updated project data back to the spreadsheet.
+ * @param {string} projectId The ID of the project to migrate.
+ * @return {object} An object indicating success status and messages. { success: boolean, message: string, details: array }
+ */
+function migrateProjectStructure(projectId) {
+    Logger.log(`Starting migration for project ID: ${projectId}`);
+    if (!projectId) {
+        return { success: false, message: "Project ID is required for migration." };
+    }
+
+    let projectData;
+    let projectFolder;
+    let projectFolderUrl;
+    const details = [];
+    let migrationNeeded = false; // Flag to track if changes were made
+
+    try {
+        // 1. Load Project Data
+        const jsonString = loadProjectFromSpreadsheet(projectId);
+        projectData = JSON.parse(jsonString);
+
+        // Check if already migrated (simple check based on folder URL in meta)
+        if (projectData.projectFolderUrl && projectData.migrationStatus === 'completed') {
+            Logger.log(`Project ${projectId} appears to be already migrated. Skipping.`);
+            return { success: true, message: "Project already migrated.", details };
+        }
+
+        // 2. Get or Create Project Folder
+        projectFolder = getProjectFolder(projectId);
+        projectFolderUrl = projectFolder.getUrl();
+
+        // Check if folder URL needs updating in metadata
+        if (projectData.projectFolderUrl !== projectFolderUrl) {
+             projectData.projectFolderUrl = projectFolderUrl;
+             migrationNeeded = true; // Mark for re-save even if no files moved
+             details.push(`Updated projectFolderUrl metadata to: ${projectFolderUrl}`);
+        }
+
+
+        // 3. Iterate through Elements and Migrate Files
+        if (projectData.slides && Array.isArray(projectData.slides)) {
+            for (const slide of projectData.slides) {
+                if (slide.elements && Array.isArray(slide.elements)) {
+                    for (const element of slide.elements) {
+                        // --- Migrate Images ---
+                        if (element.type === 'image' && element.fileId && !element.fileUrl) {
+                            migrationNeeded = true; // Needs saving if we attempt migration
+                            try {
+                                const file = DriveApp.getFileById(element.fileId);
+                                const currentParentFolders = file.getParents();
+                                let needsMove = true;
+                                if (currentParentFolders.hasNext()) {
+                                    const parentFolder = currentParentFolders.next();
+                                    if (parentFolder.getId() === projectFolder.getId()) {
+                                        needsMove = false; // Already in the correct folder
+                                    }
+                                }
+
+                                if (needsMove) {
+                                    // IMPORTANT: Check permissions before moving. Can user move this file?
+                                    // DriveApp doesn't have a direct canMove() check. Assume possible for now.
+                                    file.moveTo(projectFolder);
+                                    element.fileUrl = file.getUrl(); // Update URL after move
+                                    details.push(`Moved image file ${element.fileId} (${file.getName()}) to project folder and updated URL for element ${element.id}.`);
+                                } else {
+                                     element.fileUrl = file.getUrl(); // Update URL even if not moved
+                                     details.push(`Image file ${element.fileId} already in project folder. Updated URL for element ${element.id}.`);
+                                }
+                            } catch (e) {
+                                details.push(`Error processing image file ${element.fileId} for element ${element.id}: ${e.message}. URL not updated.`);
+                                Logger.log(`Migration error for image file ${element.fileId}: ${e.message}`);
+                            }
+                        }
+                        // --- Migrate Audio (Placeholder) ---
+                        else if (element.type === 'audio' && element.fileId && !element.fileUrl) {
+                             migrationNeeded = true;
+                             details.push(`TODO: Implement migration logic for audio file ${element.fileId} for element ${element.id}.`);
+                             // Similar logic as image: getFileById, check parent, moveTo, update fileUrl
+                        }
+                         // --- Migrate Other File Types (Add more 'else if' blocks) ---
+                    }
+                }
+            }
+        }
+
+        // 4. Mark as Migrated and Re-Save
+        if (migrationNeeded) {
+            projectData.migrationStatus = 'completed'; // Add migration status flag
+            projectData.modifiedAt = Date.now(); // Update modified time due to migration changes
+            const updatedJsonString = JSON.stringify(projectData);
+            // Save back to spreadsheet (will update folderURL and fileUrls)
+            saveProjectToSpreadsheet(updatedJsonString, projectId, projectData.title, projectFolderUrl);
+            Logger.log(`Project ${projectId} migration changes saved.`);
+            return { success: true, message: `Project ${projectId} migrated successfully.`, details };
+        } else {
+             // If no migration actions were needed, but status wasn't 'completed', mark and save.
+             if (projectData.migrationStatus !== 'completed') {
+                 projectData.migrationStatus = 'completed';
+                 projectData.modifiedAt = Date.now();
+                 const updatedJsonString = JSON.stringify(projectData);
+                 saveProjectToSpreadsheet(updatedJsonString, projectId, projectData.title, projectFolderUrl);
+                 Logger.log(`Project ${projectId} marked as migrated (no file moves needed).`);
+                 return { success: true, message: `Project ${projectId} structure verified and marked as migrated.`, details };
+             } else {
+                 Logger.log(`No migration actions needed for project ${projectId}.`);
+                 return { success: true, message: "No migration actions were required for this project.", details };
+             }
+        }
+
+    } catch (e) {
+        Logger.log(`Error during migration for project ${projectId}: ${e.message}\nStack: ${e.stack}`);
+        details.push(`Fatal migration error: ${e.message}`);
+        return { success: false, message: `Migration failed for project ${projectId}: ${e.message}`, details };
+    }
+}
+
+
+// --- Email Functions --- (No changes needed for Phase 3)
 
 /**
  * Sends quiz results to the user.
@@ -569,10 +708,22 @@ function formatQuizResultsEmail(results, isForUser) {
     const resultText = q.isCorrect ? 'Correct' : 'Incorrect';
     const resultColor = q.isCorrect ? '#2e7d32' : '#c62828'; // Dark green or red
 
+    // Escape HTML in answers to prevent injection issues
+    const escapeHtml = (unsafe) => {
+        if (typeof unsafe !== 'string') return unsafe; // Handle non-strings gracefully
+        return unsafe
+             .replace(/&/g, "&amp;")
+             .replace(/</g, "&lt;")
+             .replace(/>/g, "&gt;")
+             .replace(/"/g, "&quot;")
+             .replace(/'/g, "&#039;");
+     }
+
+
     body += `<tr style="background-color: ${bgColor};">
-              <td style="border: 1px solid #ddd;">${q.prompt || '(No prompt)'}</td>
-              <td style="border: 1px solid #ddd;">${q.userAnswer || 'N/A'}</td>
-              ${isForUser ? `<td style="border: 1px solid #ddd;">${q.correctAnswer || 'N/A'}</td>` : ''}
+              <td style="border: 1px solid #ddd;">${escapeHtml(q.prompt) || '(No prompt)'}</td>
+              <td style="border: 1px solid #ddd;">${escapeHtml(q.userAnswer) || 'N/A'}</td>
+              ${isForUser ? `<td style="border: 1px solid #ddd;">${escapeHtml(q.correctAnswer) || 'N/A'}</td>` : ''}
               <td style="border: 1px solid #ddd; color: ${resultColor}; font-weight: bold;">${resultText}</td>
              </tr>`;
   });
@@ -582,14 +733,13 @@ function formatQuizResultsEmail(results, isForUser) {
 }
 
 
-// --- MIME Type Utility --- (No changes needed for Phase 2)
+// --- MIME Type Utility --- (No changes needed for Phase 3)
 const MimeUtils = {
   mimeMap: { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'audio/mpeg': '.mp3', 'audio/ogg': '.ogg', 'audio/wav': '.wav', 'video/mp4': '.mp4', 'video/webm': '.webm', },
   extMap: { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav', '.mp4': 'video/mp4', '.webm': 'video/webm', },
   decodeDataUrl: function(dataUrl) {
-    const parts = dataUrl.match(/^data:(.+?)(;base64)?,(.+)$/); // Allow non-base64 data URLs too, though less common here
+    const parts = dataUrl.match(/^data:(.+?)(;base64)?,(.+)$/);
     if (!parts) throw new Error("Invalid data URL format");
-    // parts[1] = mimeType, parts[2] = ";base64" or undefined, parts[3] = data
     return { mimeType: parts[1], data: parts[3], isBase64: !!parts[2] };
   },
   encodeDataUrl: function(blob) {

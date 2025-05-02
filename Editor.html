@@ -18,31 +18,55 @@
 
 <body class="editor-view">
   <div id="toolbar">
+    <!-- Project Actions -->
     <button id="new-button" title="New Project">New</button>
     <button id="save-button" title="Save Project">Save</button>
+    <span id="save-status" class="save-status-indicator"></span> <!-- Save Status -->
     <button id="load-button" title="Load Project">Load</button>
+    <button id="project-settings-button" title="Project Settings & Migration">Settings</button> <!-- Added Settings Button -->
     <div class="separator"></div>
+    <!-- Add Elements -->
     <button id="add-rect-button" title="Add Rectangle">Rectangle</button>
     <button id="add-ellipse-button" title="Add Ellipse">Ellipse</button>
     <button id="add-text-button" title="Add Text">Text</button>
     <button id="upload-image-button" title="Upload Image">Image</button>
     <input type="file" id="image-upload-input" accept="image/*" style="display: none;">
     <div class="separator"></div>
+    <!-- Element Actions -->
     <button id="delete-button" title="Delete Selected" disabled>Delete</button>
+     <div class="separator"></div>
+     <span id="project-title-display" class="project-title-indicator">Untitled Project</span> <!-- Project Title Display -->
   </div>
   <div id="main-content">
-    <div id="slide-navigator"></div>
+    <div id="slide-navigator">
+       <h3>Slides</h3>
+       <ul id="slide-list"></ul>
+       <div class="slide-nav-actions">
+           <button id="add-slide-button" title="Add New Slide">+ Add Slide</button>
+           <button id="delete-slide-button" title="Delete Current Slide" disabled>Delete Slide</button>
+           <button id="upload-bg-button" title="Set Slide Background">Set BG Image</button>
+           <input type="file" id="slide-bg-input" accept="image/*" style="display: none;">
+           <span id="current-bg-filename" class="bg-filename-indicator">No background</span>
+       </div>
+    </div>
     <div id="canvas-container">
       <canvas id="editor-canvas"></canvas>
+      <div id="youtube-container" style="display:none;"></div> <!-- YouTube container -->
     </div>
     <div id="right-sidebar">
       <div id="sidebar-tabs">
         <button class="tab-link active" data-tab="properties-panel">Properties</button>
         <button class="tab-link" data-tab="sequence-panel">Sequence</button>
       </div>
-      <div id="properties-panel" class="sidebar-tab-content active"></div>
+      <div id="properties-panel" class="sidebar-tab-content active">
+         <p class="no-selection">Select an element to view its properties.</p>
+      </div>
       <div id="sequence-panel" class="sidebar-tab-content">
-        <ul id="sequence-list"></ul>
+         <h3>Interaction Sequence</h3>
+         <p class="sequence-info">Drag elements to reorder the interaction sequence for this slide.</p>
+        <ul id="sequence-list">
+            <li class="placeholder-item">No interactive elements yet.</li>
+        </ul>
       </div>
     </div>
   </div>
@@ -51,8 +75,13 @@
   <div id="text-editor-modal" class="modal"></div>
   <div id="quiz-editor-modal" class="modal"></div>
   <div id="timeline-editor-modal" class="modal"></div>
-  <div id="loading-indicator" class="modal">Loading...</div>
-  <div id="message-modal" class="modal"></div>
+  <div id="loading-indicator" class="modal loading-indicator-style">Loading...</div> <!-- Added class -->
+  <div id="message-modal" class="modal message-modal-style"></div> <!-- Added class -->
+   <div id="load-project-modal" class="modal"></div> <!-- Load Project Modal -->
+   <div id="project-settings-modal" class="modal"></div> <!-- Project Settings/Migration Modal -->
+   <div id="quiz-player-modal" class="modal"></div> <!-- Added for testing Quiz Player -->
+   <div id="quiz-results-modal" class="modal"></div> <!-- Added for testing Quiz Player -->
+
 
   <!-- JS includes - order matters! -->
   <?!= include('js/utils') ?>
@@ -74,24 +103,6 @@
   <script>
     document.addEventListener('DOMContentLoaded', () => initializeApp('editor'));
   </script>
-  <!-- Load Project Modal -->
-  <div id="load-project-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>Load Project</h2>
-        <span class="close-button">&times;</span>
-      </div>
-      <div class="modal-body">
-        <div id="load-project-list-container">
-          <div id="load-project-list">
-            <p>Loading projects...</p>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button id="load-project-cancel" class="secondary-button">Cancel</button>
-      </div>
-    </div>
-  </div>
+
 </body>
 </html>

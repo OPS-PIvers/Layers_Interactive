@@ -14,41 +14,47 @@
      */
     function runAsync(functionName, ...args) {
       // Generate a unique key for the request based on function and args
-      // Note: Simple JSON.stringify might fail for complex objects or have key order issues.
-      // Consider a more robust hashing/serialization for production if needed.
       const requestId = `${functionName}:${JSON.stringify(args)}`;
 
       // Check if this exact request is already pending
       if (pendingRequests.has(requestId)) {
-        console.log(`Request already pending: ${functionName}`);
-        // Return the existing promise
+        // console.log(`Request already pending: ${functionName}`); // Can be noisy
         return pendingRequests.get(requestId);
       }
 
-      // Create a new promise for this request
       const promise = new Promise((resolve, reject) => {
-        // Show loading indicator using Utils if available
         Utils?.showLoadingIndicator(true, `Processing ${functionName}...`);
 
         google.script.run
           .withSuccessHandler(result => {
             Utils?.showLoadingIndicator(false);
-            pendingRequests.delete(requestId); // Remove from pending on success
+            pendingRequests.delete(requestId);
             resolve(result);
           })
           .withFailureHandler(error => {
             Utils?.showLoadingIndicator(false);
             console.error(`Error in ${functionName} (Args: ${JSON.stringify(args)}):`, error);
-            pendingRequests.delete(requestId); // Remove from pending on failure
-            reject(error); // Reject the promise with the error
+            pendingRequests.delete(requestId);
+            // Attempt to parse into a JS Error object if possible
+            try {
+                 // Google Apps Script often returns error messages as strings.
+                 // Try to create a real Error object.
+                 if (typeof error === 'string') {
+                    reject(new Error(error));
+                 } else if (error && error.message) {
+                    reject(new Error(error.message));
+                 }
+                  else {
+                    reject(error); // Reject with the original error object/string
+                 }
+            } catch (parseError) {
+                reject(error); // Fallback to original error if parsing fails
+            }
           })
           [functionName](...args);
       });
 
-      // Store the promise in the pending map
       pendingRequests.set(requestId, promise);
-
-      // Return the promise
       return promise;
     }
 
@@ -115,27 +121,26 @@
       // Pass projectId to the server-side function
       return runAsync('saveImageFile', dataUrl, safeFilename, projectId)
         .then(result => {
-          if (!result || !result.fileId || !result.fileUrl) { // Check for both fileId and fileUrl
+          if (!result || !result.fileId || !result.fileUrl) {
             console.error("Server returned invalid result structure:", result);
             throw new Error('Server did not return valid file ID and URL.');
           }
-          console.log(`Image uploaded successfully: ID=${result.fileId}, URL=${result.fileUrl}`);
+          // console.log(`Image uploaded successfully: ID=${result.fileId}, URL=${result.fileUrl}`); // Noisy
           return result; // Contains { fileId, fileUrl }
         });
     }
 
     /**
-     * Load an image using its file ID.
+     * Load an image using its file ID. Includes client-side caching.
      * @param {string} fileId - Image file ID
      * @return {Promise<string>} Promise resolving to image data URL
      */
     function loadImage(fileId) {
       if (!fileId) {
-        console.warn("loadImage called with null or empty fileId.");
+        // console.warn("loadImage called with null or empty fileId."); // Noisy
         return Promise.reject(new Error('File ID is required'));
       }
 
-      // Create a cache key for this request
       const cacheKey = `image:${fileId}`;
 
       // Check browser cache first (sessionStorage)
@@ -143,12 +148,11 @@
         try {
             const cachedData = sessionStorage.getItem(cacheKey);
             if (cachedData) {
-                console.log(`Using cached image data for fileId: ${fileId}`);
+                // console.log(`Using cached image data for fileId: ${fileId}`); // Noisy
                 return Promise.resolve(cachedData);
             }
         } catch (e) {
              console.warn("Session storage is unavailable or disabled.", e);
-             // Proceed without cache if sessionStorage fails
         }
       }
 
@@ -165,7 +169,6 @@
               sessionStorage.setItem(cacheKey, dataUrl);
             } catch (error) {
               console.warn(`Failed to cache image data (might be storage limit): ${error}`);
-              // Ignore cache errors (e.g., storage full)
             }
           }
 
@@ -177,7 +180,7 @@
           if (error.message && error.message.includes("File not found")) {
               clearImageCache(fileId);
           }
-          throw error; // Re-throw the original error
+          throw error;
         });
     }
 
@@ -198,10 +201,9 @@
 
       const safeFilename = filename || `audio_${Date.now()}.mp3`;
 
-      // Pass projectId to the server-side function
       return runAsync('saveAudioFile', dataUrl, safeFilename, projectId)
         .then(result => {
-           if (!result || !result.fileId || !result.fileUrl) { // Check for both fileId and fileUrl
+           if (!result || !result.fileId || !result.fileUrl) {
             console.error("Server returned invalid result structure for audio:", result);
             throw new Error('Server did not return valid file ID and URL for audio.');
           }
@@ -219,10 +221,6 @@
       if (!fileId) {
         return Promise.reject(new Error('File ID is required for audio'));
       }
-
-      // Caching for audio might consume too much space quickly, so skipping for now.
-      // Consider implementing if audio files are small or re-used frequently.
-
       return runAsync('getAudioDataUrl', fileId)
         .then(dataUrl => {
           if (!dataUrl || !dataUrl.startsWith('data:')) {
@@ -242,11 +240,9 @@
       if (!results) {
         return Promise.reject(new Error('Quiz results are required'));
       }
-
-      if (!userEmail || !/\S+@\S+\.\S+/.test(userEmail)) { // Basic email format check
+      if (!userEmail || !/\S+@\S+\.\S+/.test(userEmail)) {
         return Promise.reject(new Error('Valid email address is required'));
       }
-
       return runAsync('sendQuizResultsToUser', results, userEmail);
     }
 
@@ -260,13 +256,25 @@
       if (!results) {
         return Promise.reject(new Error('Quiz results are required'));
       }
-
-      if (!creatorEmail || !/\S+@\S+\.\S+/.test(creatorEmail)) { // Basic email format check
+      if (!creatorEmail || !/\S+@\S+\.\S+/.test(creatorEmail)) {
         return Promise.reject(new Error('Valid creator email address is required'));
       }
-
       return runAsync('sendQuizResultsToCreator', results, creatorEmail);
     }
+
+    /**
+     * Calls the server-side function to migrate a project's structure.
+     * @param {string} projectId The ID of the project to migrate.
+     * @return {Promise<object>} Promise resolving to the migration result object { success: boolean, message: string, details: array }.
+     */
+    function migrateProject(projectId) {
+        if (!projectId) {
+            return Promise.reject(new Error('Project ID is required for migration.'));
+        }
+        console.log(`Initiating migration request for project: ${projectId}`);
+        return runAsync('migrateProjectStructure', projectId);
+    }
+
 
     /**
      * Clear image cache for a specific fileId or all images
@@ -276,12 +284,10 @@
       if (window.sessionStorage) {
          try {
             if (fileId) {
-                // Clear specific image
                 const cacheKey = `image:${fileId}`;
                 sessionStorage.removeItem(cacheKey);
-                 console.log(`Cleared cache for image: ${fileId}`);
+                 // console.log(`Cleared cache for image: ${fileId}`); // Noisy
             } else {
-                // Clear all cached images
                 const keysToRemove = [];
                 for (let i = 0; i < sessionStorage.length; i++) {
                     const key = sessionStorage.key(i);
@@ -310,6 +316,7 @@
       loadAudio,
       sendQuizToUser,
       sendQuizToCreator,
+      migrateProject, // <-- Added migration function
       clearImageCache
     };
   })();
