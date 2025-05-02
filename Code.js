@@ -33,7 +33,7 @@ function getProjectFolder_() {
 }
 
 /**
- * Saves or updates the project JSON file in Drive.
+ * Saves or updates the project in Google Sheets.
  * @param {string} projectJsonString - The project data as JSON string
  * @param {string} projectId - The project ID (if updating existing project)
  * @param {string} title - The project title
@@ -43,16 +43,8 @@ function saveProjectData(projectJsonString, projectId, title) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const folder = getProjectFolder_();
-    let file;
-    if (projectId) {
-      file = DriveApp.getFileById(projectId);
-      file.setContent(projectJsonString);
-    } else {
-      file = folder.createFile(`${title}.json`, projectJsonString, MimeType.PLAIN_TEXT);
-      projectId = file.getId();
-    }
-    return { projectId: projectId, lastModified: file.getLastUpdated() };
+    // Save to spreadsheet backend
+    return saveProjectToSpreadsheet(projectJsonString, projectId, title);
   } catch (error) {
     console.error('Error saving project:', error);
     throw new Error(`Failed to save project: ${error.message}`);
@@ -62,17 +54,46 @@ function saveProjectData(projectJsonString, projectId, title) {
 }
 
 /**
- * Loads project JSON string from Drive file.
+ * Loads project JSON string from Google Sheets.
  * @param {string} projectId - The project ID
  * @return {string} The project data as JSON string
  */
 function loadProjectData(projectId) {
   try {
-    const file = DriveApp.getFileById(projectId);
-    return file.getBlob().getDataAsString();
+    // Load from spreadsheet backend
+    return loadProjectFromSpreadsheet(projectId);
   } catch (error) {
     console.error('Error loading project:', error);
     throw new Error(`Failed to load project: ${error.message}`);
+  }
+}
+
+/**
+ * Lists all projects.
+ * @return {Array} List of projects
+ */
+function listProjects() {
+  try {
+    // List projects from spreadsheet backend
+    return listProjectsFromSpreadsheet();
+  } catch (error) {
+    console.error('Error listing projects:', error);
+    throw new Error(`Failed to list projects: ${error.message}`);
+  }
+}
+
+/**
+ * Deletes a project.
+ * @param {string} projectId - The project ID
+ * @return {boolean} Success
+ */
+function deleteProject(projectId) {
+  try {
+    // Delete project from spreadsheet backend
+    return deleteProjectFromSpreadsheet(projectId);
+  } catch (error) {
+    console.error('Error deleting project:', error);
+    throw new Error(`Failed to delete project: ${error.message}`);
   }
 }
 
