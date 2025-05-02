@@ -120,6 +120,70 @@
       display: block;
     }
     
+    /* Project list styles */
+    #load-project-list-container {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    #load-project-list ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .load-project-item {
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      margin-bottom: 8px;
+      border: 1px solid #eee;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    .load-project-item:hover {
+      background-color: #f0f7ff;
+      border-color: #2196f3;
+    }
+
+    .project-title {
+      font-weight: bold;
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+
+    .project-date {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .project-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
+
+    .project-actions button {
+      margin-left: 8px;
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+
+    .empty-project-list {
+      padding: 20px;
+      text-align: center;
+      color: #666;
+    }
+
+    .error-message {
+      color: #d32f2f;
+      padding: 12px;
+      background-color: #ffebee;
+      border-radius: 4px;
+      margin: 8px 0;
+    }
     /* Properties Panel */
     .property-section {
       margin-bottom: 16px;

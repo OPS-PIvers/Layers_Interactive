@@ -48,6 +48,37 @@
     }
     
     /**
+     * List all projects
+     * @return {Promise} Promise resolving to list of projects
+     */
+    function listProjects() {
+      return runAsync('listProjects');
+    }
+
+    /**
+     * Delete a project
+     * @param {string} projectId - Project ID
+     * @return {Promise} Promise resolving to success status
+     */
+    function deleteProject(projectId) {
+      return runAsync('deleteProject', projectId);
+    }
+
+    // Public API
+    return {
+      saveProject,
+      loadProject,
+      listProjects,     // Add this function to the public API
+      deleteProject,    // Add this function to the public API
+      uploadImage,
+      loadImage,
+      uploadAudio,
+      loadAudio,
+      sendQuizToUser,
+      sendQuizToCreator
+    }; 
+
+    /**
      * Upload an image
      * @param {string} dataUrl - Image data URL
      * @param {string} filename - Image filename

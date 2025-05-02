@@ -320,45 +320,244 @@
         /**
          * Handle showing load modal
          */
-        async function handleShowLoadModal() {
-            // Check for unsaved changes
-            if (StateManager && typeof StateManager.isDirty === 'function' && 
-                StateManager.isDirty() && 
-                !confirm("You have unsaved changes. Are you sure you want to load another project?")) {
-                return;
-            }
-            
-            // Get load modal
-            const loadModal = document.getElementById('load-project-modal');
-            const loadProjectListContainer = document.getElementById('load-project-list');
-            
-            if (!loadModal || !loadProjectListContainer) {
-                Utils.showError("Load modal not available");
-                return;
-            }
-            
-            // Show modal
-            loadModal.classList.add('active');
-            loadProjectListContainer.innerHTML = '<p>Loading projects...</p>';
-            
-            try {
-                // Load projects
-                const projects = await ServerClient.listProjects();
-                renderLoadProjectList(projects, loadProjectListContainer);
-            } catch (error) {
-                console.error("Failed to list projects:", error);
-                loadProjectListContainer.innerHTML = `<p class="error-message">Error loading projects: ${error.message}</p>`;
-            }
+        function handleShowLoadModal() {
+        // Check for unsaved changes
+        if (StateManager && typeof StateManager.isDirty === 'function' && 
+            StateManager.isDirty() && 
+            !confirm("You have unsaved changes. Are you sure you want to load another project?")) {
+            return;
         }
         
+        // Get load modal
+        const loadModal = document.getElementById('load-project-modal');
+        const loadProjectListContainer = document.getElementById('load-project-list');
+        
+        if (!loadModal || !loadProjectListContainer) {
+            Utils.showError("Load modal not available");
+            return;
+        }
+        
+        // Add close handlers if not already added
+        const closeButton = loadModal.querySelector('.close-button');
+        const cancelButton = document.getElementById('load-project-cancel');
+        
+        if (closeButton) {
+            closeButton.onclick = closeLoadModal;
+        }
+        
+        if (cancelButton) {
+            cancelButton.onclick = closeLoadModal;
+        }
+        
+        // Show modal
+        loadModal.style.display = 'flex';
+        loadProjectListContainer.innerHTML = '<p>Loading projects...</p>';
+        
+        try {
+            // Load projects
+            Utils.showLoadingIndicator(true, 'Loading projects...');
+            
+            ServerClient.listProjects()
+            .then(projects => {
+                Utils.showLoadingIndicator(false);
+                renderLoadProjectList(projects, loadProjectListContainer);
+            })
+            .catch(error => {
+                Utils.showLoadingIndicator(false);
+                console.error("Failed to list projects:", error);
+                loadProjectListContainer.innerHTML = `
+                <div class="error-message">
+                    Error loading projects: ${error.message}
+                    <button id="retry-load-projects" class="secondary-button">Retry</button>
+                </div>
+                `;
+                
+                // Add retry button handler
+                const retryButton = document.getElementById('retry-load-projects');
+                if (retryButton) {
+                retryButton.addEventListener('click', handleShowLoadModal);
+                }
+            });
+        } catch (error) {
+            Utils.showLoadingIndicator(false);
+            console.error("Error in handleShowLoadModal:", error);
+            loadProjectListContainer.innerHTML = `<div class="error-message">Error: ${error.message}</div>`;
+        }
+        }
+
         /**
          * Close load modal
          */
         function closeLoadModal() {
-            const loadModal = document.getElementById('load-project-modal');
-            if (loadModal) {
-                loadModal.classList.remove('active');
+        const loadModal = document.getElementById('load-project-modal');
+        if (loadModal) {
+            loadModal.style.display = 'none';
+        }
+        }
+
+        /**
+         * Render project list in load modal
+         * @param {Array} projects - List of projects
+         * @param {HTMLElement} container - Container element
+         */
+        function renderLoadProjectList(projects, container) {
+        if (!container) return;
+        
+        if (!projects || !projects.length) {
+            container.innerHTML = `
+            <div class="empty-project-list">
+                <p>No projects found.</p>
+                <p>Create a new project by clicking the "New" button.</p>
+            </div>
+            `;
+            return;
+        }
+        
+        // Sort projects by last modified date (newest first)
+        projects.sort((a, b) => b.lastModified - a.lastModified);
+        
+        // Create HTML list
+        let listHtml = '<ul>';
+        
+        projects.forEach(project => {
+            const modifiedDate = new Date(project.lastModified).toLocaleDateString();
+            const modifiedTime = new Date(project.lastModified).toLocaleTimeString();
+            
+            listHtml += `
+            <li class="load-project-item" data-project-id="${project.id}">
+                <span class="project-title">${project.title || 'Untitled Project'}</span>
+                <span class="project-date">Last modified: ${modifiedDate} at ${modifiedTime}</span>
+                <div class="project-actions">
+                <button class="load-project-btn primary-button" data-project-id="${project.id}">Load</button>
+                <button class="delete-project-btn" data-project-id="${project.id}">Delete</button>
+                </div>
+            </li>
+            `;
+        });
+        
+        listHtml += '</ul>';
+        
+        // Set container HTML
+        container.innerHTML = listHtml;
+        
+        // Add click handlers for load buttons
+        const loadButtons = container.querySelectorAll('.load-project-btn');
+        loadButtons.forEach(button => {
+            button.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent triggering parent li click
+            const projectId = button.dataset.projectId;
+            if (projectId) {
+                handleLoadProject(projectId);
             }
+            });
+        });
+        
+        // Add click handlers for delete buttons
+        const deleteButtons = container.querySelectorAll('.delete-project-btn');
+        deleteButtons.forEach(button => {
+            button.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent triggering parent li click
+            const projectId = button.dataset.projectId;
+            if (projectId) {
+                handleDeleteProject(projectId);
+            }
+            });
+        });
+        
+        // Also allow clicking the whole row to load
+        const listItems = container.querySelectorAll('.load-project-item');
+        listItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+            // Don't trigger if clicking on a button
+            if (e.target.tagName !== 'BUTTON') {
+                const projectId = item.dataset.projectId;
+                if (projectId) {
+                handleLoadProject(projectId);
+                }
+            }
+            });
+        });
+        }
+
+        /**
+         * Handle loading a project
+         * @param {string} projectId - Project ID to load
+         */
+        async function handleLoadProject(projectId) {
+        closeLoadModal();
+        
+        if (!projectId) {
+            return;
+        }
+        
+        Utils.showLoadingIndicator(true, 'Loading Project...');
+        
+        try {
+            // Load project data
+            const jsonString = await ServerClient.loadProject(projectId);
+            
+            // Parse project data
+            if (StateManager && typeof StateManager.loadProjectData === 'function') {
+            const loaded = StateManager.loadProjectData(jsonString);
+            
+            if (loaded) {
+                // Load first slide
+                if (CanvasController && typeof CanvasController.loadSlide === 'function' &&
+                    typeof StateManager.getCurrentSlide === 'function') {
+                CanvasController.loadSlide(StateManager.getCurrentSlide());
+                }
+                
+                // Update UI
+                updateSlideList();
+                updateSequenceList();
+                updatePropertiesPanel(null);
+                updateProjectTitleDisplay();
+                updateSaveStatus(false);
+                
+                Utils.showSuccess(`Project "${StateManager.getProjectTitle()}" loaded successfully`);
+            } else {
+                throw new Error("Failed to parse project data");
+            }
+            } else {
+            throw new Error("StateManager not available");
+            }
+        } catch (error) {
+            console.error("Load failed:", error);
+            Utils.showError(`Failed to load project: ${error.message}`);
+        } finally {
+            Utils.showLoadingIndicator(false);
+        }
+        }
+
+        /**
+         * Handle deleting a project
+         * @param {string} projectId - Project ID to delete
+         */
+        async function handleDeleteProject(projectId) {
+        if (!projectId || !confirm("Are you sure you want to delete this project? This cannot be undone.")) {
+            return;
+        }
+        
+        Utils.showLoadingIndicator(true, 'Deleting Project...');
+        
+        try {
+            // Delete project
+            const success = await ServerClient.deleteProject(projectId);
+            
+            if (success) {
+            Utils.showSuccess("Project deleted successfully");
+            
+            // Refresh project list
+            handleShowLoadModal();
+            } else {
+            throw new Error("Failed to delete project");
+            }
+        } catch (error) {
+            console.error("Delete failed:", error);
+            Utils.showError(`Failed to delete project: ${error.message}`);
+        } finally {
+            Utils.showLoadingIndicator(false);
+        }
         }
         
         /**

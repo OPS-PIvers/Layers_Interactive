@@ -74,5 +74,24 @@
   <script>
     document.addEventListener('DOMContentLoaded', () => initializeApp('editor'));
   </script>
+  <!-- Load Project Modal -->
+  <div id="load-project-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Load Project</h2>
+        <span class="close-button">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div id="load-project-list-container">
+          <div id="load-project-list">
+            <p>Loading projects...</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="load-project-cancel" class="secondary-button">Cancel</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
