@@ -1,223 +1,250 @@
 <script>
+  /**
+   * Manages image uploads and additions to the canvas
+   */
+  const ImageManager = (() => {
     /**
-     * Manages image uploads and additions to the canvas
+     * Initialize image manager
      */
-    const ImageManager = (() => {
-      /**
-       * Initialize image manager
-       */
-      function init() {
-        // Set up event listeners
-        const uploadButton = document.getElementById('upload-image-button');
-        const uploadInput = document.getElementById('image-upload-input');
+    function init() {
+      // Set up event listeners
+      const uploadButton = document.getElementById('upload-image-button');
+      const uploadInput = document.getElementById('image-upload-input');
+      
+      if (uploadButton && uploadInput) {
+        uploadButton.addEventListener('click', () => {
+          uploadInput.click();
+        });
         
-        if (uploadButton && uploadInput) {
-          uploadButton.addEventListener('click', () => {
-            uploadInput.click();
-          });
-          
-          uploadInput.addEventListener('change', handleImageUpload);
-        }
-        
-        // Allow pasting images from clipboard
-        document.addEventListener('paste', handlePasteEvent);
-        
-        console.log('ImageManager initialized successfully');
+        uploadInput.addEventListener('change', handleImageUpload);
+      } else {
+        console.warn('Image upload elements not found. Make sure they exist in the DOM.');
       }
       
-      /**
-       * Handle image file upload
-       * @param {Event} event - Change event from file input
-       */
-      function handleImageUpload(event) {
-        const file = event.target.files[0];
-        if (!file || !file.type.startsWith('image/')) {
-          Utils.showError('Please select a valid image file');
+      // Allow pasting images from clipboard
+      document.addEventListener('paste', handlePasteEvent);
+      
+      console.log('ImageManager initialized successfully');
+    }
+    
+    /**
+     * Handle image file upload
+     * @param {Event} event - Change event from file input
+     */
+    function handleImageUpload(event) {
+      const file = event.target.files[0];
+      if (!file || !file.type.startsWith('image/')) {
+        Utils.showError('Please select a valid image file');
+        return;
+      }
+      
+      console.log('Processing uploaded file:', file.name);
+      processImageFile(file);
+      
+      // Reset the input so the same file can be selected again
+      event.target.value = '';
+    }
+    
+    /**
+     * Handle paste event for images
+     * @param {Event} event - Paste event
+     */
+    function handlePasteEvent(event) {
+      // Only process paste in editor mode
+      if (!document.querySelector('.editor-view')) return;
+      
+      const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+      
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          console.log('Image pasted from clipboard');
+          const file = items[i].getAsFile();
+          processImageFile(file);
+          event.preventDefault();
           return;
         }
-        
-        console.log('Processing uploaded file:', file.name);
-        processImageFile(file);
-        
-        // Reset the input so the same file can be selected again
-        event.target.value = '';
       }
+    }
+    
+    /**
+     * Process an image file
+     * @param {File} file - Image file
+     */
+    function processImageFile(file) {
+      Utils.showLoadingIndicator(true, 'Processing image...');
       
-      /**
-       * Handle paste event for images
-       * @param {Event} event - Paste event
-       */
-      function handlePasteEvent(event) {
-        // Only process paste in editor mode
-        if (!document.querySelector('.editor-view')) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target.result;
+        console.log('Image file read successfully, uploading to server...');
         
-        const items = (event.clipboardData || event.originalEvent.clipboardData).items;
-        
-        for (let i = 0; i < items.length; i++) {
-          if (items[i].type.indexOf('image') !== -1) {
-            console.log('Image pasted from clipboard');
-            const file = items[i].getAsFile();
-            processImageFile(file);
-            event.preventDefault();
-            return;
-          }
-        }
-      }
-      
-      /**
-       * Process an image file
-       * @param {File} file - Image file
-       */
-      function processImageFile(file) {
-        Utils.showLoadingIndicator(true, 'Processing image...');
-        
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const dataUrl = e.target.result;
-          console.log('Image file read successfully, uploading to server...');
-          
-          // Upload to server
-          ServerClient.uploadImage(dataUrl, file.name)
-            .then(result => {
-              console.log('Image uploaded successfully:', result);
-              if (result && result.fileId) {
-                // Add image to canvas
-                addImageToCanvas(result.fileId, dataUrl, file.name);
-              } else {
-                throw new Error('Failed to upload image - no fileId returned');
-              }
-            })
-            .catch(error => {
-              console.error('Error uploading image:', error);
-              Utils.showError(`Failed to upload image: ${error.message}`);
-            })
-            .finally(() => {
-              Utils.showLoadingIndicator(false);
-            });
-        };
-        
-        reader.onerror = (error) => {
-          console.error('Error reading file:', error);
-          Utils.showLoadingIndicator(false);
-          Utils.showError('Failed to read image file');
-        };
-        
-        reader.readAsDataURL(file);
-      }
-      
-      /**
-       * Add image to canvas
-       * @param {string} fileId - Image file ID
-       * @param {string} dataUrl - Image data URL (optional, for preview)
-       * @param {string} fileName - Original file name
-       */
-      function addImageToCanvas(fileId, dataUrl = null, fileName = 'image') {
-        console.log('Adding image to canvas, fileId:', fileId);
-        
-        // If we already have the dataUrl, use it directly, otherwise load from server
-        const imagePromise = dataUrl ? Promise.resolve(dataUrl) : ServerClient.loadImage(fileId);
-        
-        imagePromise
-          .then(imgUrl => {
-            console.log('Image data loaded, creating fabric image object');
-            
-            fabric.Image.fromURL(imgUrl, img => {
-              if (!img) {
-                throw new Error('Failed to create fabric.js image object');
-              }
-              
-              console.log('Fabric image created, original dimensions:', img.width, 'x', img.height);
-              
-              // Scale image to fit on canvas (max 300px width/height)
-              const maxSize = 300;
-              if (img.width > maxSize || img.height > maxSize) {
-                const scale = Math.min(maxSize / img.width, maxSize / img.height);
-                img.scale(scale);
-              }
-              
-              // Center the image on the canvas
-              const canvas = CanvasController.getCanvas();
-              if (!canvas) {
-                throw new Error('Canvas not available');
-              }
-              
-              // Generate element ID
-              const elementId = Utils.generateId('element-');
-              
-              // Calculate center position
-              const canvasCenter = {
-                left: canvas.width / 2,
-                top: canvas.height / 2
-              };
-              
-              // Create element data
-              const elementData = {
-                id: elementId,
-                type: 'image',
-                fileId: fileId,
-                left: canvasCenter.left - (img.getScaledWidth() / 2),
-                top: canvasCenter.top - (img.getScaledHeight() / 2),
-                width: img.getScaledWidth(),
-                height: img.getScaledHeight(),
-                nickname: `Image ${fileName || elementId}`,
-                style: {
-                  opacity: 1
-                }
-              };
-              
-              console.log('Element data created:', elementData);
-              
-              // Set properties on image object
-              img.set({
-                id: elementId,
-                left: elementData.left,
-                top: elementData.top,
-                selectable: true,
-                hasControls: true,
-                hasBorders: true
-              });
-              
-              // Add element data to state
-              const added = StateManager.addElementData(elementData);
-              if (!added) {
-                console.error('Failed to add element data to state manager');
-              }
-              
-              console.log('Adding image to canvas...');
-              
-              // Add to canvas
-              canvas.add(img);
-              canvas.setActiveObject(img);
-              canvas.renderAll();
-              
-              console.log('Image added to canvas successfully');
-              
-              // Update sequence list
-              if (typeof EditorUI !== 'undefined' && typeof EditorUI.updateSequenceList === 'function') {
-                EditorUI.updateSequenceList();
-              }
-              
-              // Update properties panel if EditorUI is available
-              if (typeof EditorUI !== 'undefined' && typeof EditorUI.updatePropertiesPanel === 'function') {
-                EditorUI.updatePropertiesPanel(img);
-              }
-              
-              Utils.showSuccess('Image added successfully');
-            }, {
-              crossOrigin: 'Anonymous' // Add this to handle cross-origin images
-            });
+        // Upload to server
+        ServerClient.uploadImage(dataUrl, file.name)
+          .then(result => {
+            console.log('Image uploaded successfully:', result);
+            if (result && result.fileId) {
+              // Add image to canvas
+              addImageToCanvas(result.fileId, dataUrl, file.name);
+            } else {
+              throw new Error('Failed to upload image - no fileId returned');
+            }
           })
           .catch(error => {
-            console.error('Error adding image to canvas:', error);
-            Utils.showError(`Failed to add image: ${error.message}`);
+            console.error('Error uploading image:', error);
+            Utils.showError(`Failed to upload image: ${error.message}`);
+          })
+          .finally(() => {
+            Utils.showLoadingIndicator(false);
           });
+      };
+      
+      reader.onerror = (error) => {
+        console.error('Error reading file:', error);
+        Utils.showLoadingIndicator(false);
+        Utils.showError('Failed to read image file');
+      };
+      
+      reader.readAsDataURL(file);
+    }
+    
+    /**
+     * Add image to canvas
+     * @param {string} fileId - Image file ID
+     * @param {string} dataUrl - Image data URL (optional, for preview)
+     * @param {string} fileName - Original file name
+     */
+    function addImageToCanvas(fileId, dataUrl = null, fileName = 'image') {
+      if (!fileId) {
+        Utils.showError('Invalid file ID');
+        return;
       }
       
-      // Public API
-      return {
-        init,
-        handleImageUpload,
-        addImageToCanvas
-      };
-    })();
-    </script>
+      console.log('Adding image to canvas, fileId:', fileId);
+      
+      // If we already have the dataUrl, use it directly, otherwise load from server
+      const imagePromise = dataUrl ? Promise.resolve(dataUrl) : ServerClient.loadImage(fileId);
+      
+      imagePromise
+        .then(imgUrl => {
+          console.log('Image data loaded, creating fabric image object');
+          
+          fabric.Image.fromURL(imgUrl, img => {
+            if (!img) {
+              throw new Error('Failed to create fabric.js image object');
+            }
+            
+            console.log('Fabric image created, original dimensions:', img.width, 'x', img.height);
+            
+            // Scale image to fit on canvas (max 300px width/height)
+            const maxSize = 300;
+            if (img.width > maxSize || img.height > maxSize) {
+              const scale = Math.min(maxSize / img.width, maxSize / img.height);
+              img.scale(scale);
+            }
+            
+            // Center the image on the canvas
+            const canvas = CanvasController.getCanvas();
+            if (!canvas) {
+              throw new Error('Canvas not available');
+            }
+            
+            // Generate element ID
+            const elementId = Utils.generateId('element-');
+            
+            // Calculate center position
+            const canvasCenter = {
+              left: canvas.width / 2,
+              top: canvas.height / 2
+            };
+            
+            // Create element data
+            const elementData = {
+              id: elementId,
+              type: 'image',
+              fileId: fileId, // Store fileId in element data
+              left: canvasCenter.left - (img.getScaledWidth() / 2),
+              top: canvasCenter.top - (img.getScaledHeight() / 2),
+              width: img.getScaledWidth(),
+              height: img.getScaledHeight(),
+              nickname: `Image: ${fileName.substring(0, 20)}` || elementId,
+              style: {
+                opacity: 1
+              }
+            };
+            
+            console.log('Element data created:', elementData);
+            
+            // Set properties on image object
+            img.set({
+              id: elementId,
+              fileId: fileId, // Store fileId on Fabric object
+              left: elementData.left,
+              top: elementData.top,
+              selectable: true,
+              hasControls: true,
+              hasBorders: true
+            });
+            
+            // Add element data to state
+            const added = StateManager.addElementData(elementData);
+            if (!added) {
+              console.error('Failed to add element data to state manager');
+              Utils.showError('Failed to add image to project');
+              return;
+            }
+            
+            console.log('Adding image to canvas...');
+            
+            // Add to canvas
+            canvas.add(img);
+            canvas.setActiveObject(img);
+            canvas.renderAll();
+            
+            console.log('Image added to canvas successfully');
+            
+            // Update sequence list
+            if (typeof EditorUI !== 'undefined' && typeof EditorUI.updateSequenceList === 'function') {
+              EditorUI.updateSequenceList();
+            }
+            
+            // Update properties panel if EditorUI is available
+            if (typeof EditorUI !== 'undefined' && typeof EditorUI.updatePropertiesPanel === 'function') {
+              EditorUI.updatePropertiesPanel(img);
+            }
+            
+            Utils.showSuccess('Image added successfully');
+          }, {
+            crossOrigin: 'Anonymous' // Add this to handle cross-origin images
+          });
+        })
+        .catch(error => {
+          console.error('Error adding image to canvas:', error);
+          Utils.showError(`Failed to add image: ${error.message}`);
+        });
+    }
+    
+    /**
+     * Validate if image exists in Drive
+     * @param {string} fileId - Image file ID
+     * @return {Promise<boolean>} Whether image exists
+     */
+    function validateImage(fileId) {
+      if (!fileId) return Promise.resolve(false);
+      
+      return ServerClient.loadImage(fileId)
+        .then(() => true)
+        .catch(error => {
+          console.warn(`Image validation failed for ${fileId}:`, error);
+          return false;
+        });
+    }
+    
+    // Public API
+    return {
+      init,
+      handleImageUpload,
+      addImageToCanvas,
+      validateImage
+    };
+  })();
+  </script>

@@ -3,6 +3,9 @@
    * Client for server-side API calls
    */
   const ServerClient = (() => {
+    // Track pending requests to prevent duplicates
+    const pendingRequests = new Map();
+    
     /**
      * Run a server function asynchronously
      * @param {string} functionName - Server function name
@@ -11,19 +14,40 @@
      */
     function runAsync(functionName, ...args) {
       return new Promise((resolve, reject) => {
-        Utils.showLoadingIndicator(true, `Processing ${functionName}...`);
+        const requestId = `${functionName}:${JSON.stringify(args)}`;
         
-        google.script.run
-          .withSuccessHandler(result => {
-            Utils.showLoadingIndicator(false);
-            resolve(result);
-          })
-          .withFailureHandler(error => {
-            Utils.showLoadingIndicator(false);
-            console.error(`Error in ${functionName}:`, error);
-            reject(error);
-          })
-          [functionName](...args);
+        // Check if this exact request is already pending
+        if (pendingRequests.has(requestId)) {
+          console.log(`Request already pending: ${requestId}`);
+          return pendingRequests.get(requestId);
+        }
+        
+        // Create a new promise
+        const promise = new Promise((innerResolve, innerReject) => {
+          Utils.showLoadingIndicator(true, `Processing ${functionName}...`);
+          
+          google.script.run
+            .withSuccessHandler(result => {
+              Utils.showLoadingIndicator(false);
+              // Remove from pending requests
+              pendingRequests.delete(requestId);
+              innerResolve(result);
+            })
+            .withFailureHandler(error => {
+              Utils.showLoadingIndicator(false);
+              console.error(`Error in ${functionName}:`, error);
+              // Remove from pending requests
+              pendingRequests.delete(requestId);
+              innerReject(error);
+            })
+            [functionName](...args);
+        });
+        
+        // Store the promise
+        pendingRequests.set(requestId, promise);
+        
+        // Return the promise
+        promise.then(resolve).catch(reject);
       });
     }
     
@@ -44,6 +68,9 @@
      * @return {Promise} Promise resolving to project JSON string
      */
     function loadProject(projectId) {
+      if (!projectId) {
+        return Promise.reject(new Error('Project ID is required'));
+      }
       return runAsync('loadProjectData', projectId);
     }
     
@@ -61,22 +88,11 @@
      * @return {Promise} Promise resolving to success status
      */
     function deleteProject(projectId) {
+      if (!projectId) {
+        return Promise.reject(new Error('Project ID is required'));
+      }
       return runAsync('deleteProject', projectId);
     }
-
-    // Public API
-    return {
-      saveProject,
-      loadProject,
-      listProjects,     // Add this function to the public API
-      deleteProject,    // Add this function to the public API
-      uploadImage,
-      loadImage,
-      uploadAudio,
-      loadAudio,
-      sendQuizToUser,
-      sendQuizToCreator
-    }; 
 
     /**
      * Upload an image
@@ -85,7 +101,23 @@
      * @return {Promise} Promise resolving to upload result
      */
     function uploadImage(dataUrl, filename) {
-      return runAsync('saveImageFile', dataUrl, filename);
+      if (!dataUrl || !dataUrl.startsWith('data:')) {
+        return Promise.reject(new Error('Invalid image data URL'));
+      }
+      
+      if (!filename) {
+        filename = `image_${Date.now()}.png`;
+      }
+      
+      return runAsync('saveImageFile', dataUrl, filename)
+        .then(result => {
+          if (!result || !result.fileId) {
+            throw new Error('Server returned invalid file ID');
+          }
+          
+          console.log(`Image uploaded successfully with fileId: ${result.fileId}`);
+          return result;
+        });
     }
     
     /**
@@ -94,7 +126,44 @@
      * @return {Promise} Promise resolving to image data URL
      */
     function loadImage(fileId) {
-      return runAsync('getImageDataUrl', fileId);
+      if (!fileId) {
+        return Promise.reject(new Error('File ID is required'));
+      }
+      
+      // Create a cache key for this request
+      const cacheKey = `image:${fileId}`;
+      
+      // Check browser cache first (sessionStorage)
+      if (window.sessionStorage) {
+        const cachedData = sessionStorage.getItem(cacheKey);
+        if (cachedData) {
+          console.log(`Using cached image data for fileId: ${fileId}`);
+          return Promise.resolve(cachedData);
+        }
+      }
+      
+      return runAsync('getImageDataUrl', fileId)
+        .then(dataUrl => {
+          if (!dataUrl || !dataUrl.startsWith('data:')) {
+            throw new Error('Server returned invalid data URL');
+          }
+          
+          // Cache the result in sessionStorage
+          if (window.sessionStorage) {
+            try {
+              sessionStorage.setItem(cacheKey, dataUrl);
+            } catch (error) {
+              console.warn('Failed to cache image data:', error);
+              // Ignore errors (storage might be full)
+            }
+          }
+          
+          return dataUrl;
+        })
+        .catch(error => {
+          console.error(`Failed to load image with fileId: ${fileId}`, error);
+          throw error;
+        });
     }
     
     /**
@@ -104,7 +173,22 @@
      * @return {Promise} Promise resolving to upload result
      */
     function uploadAudio(dataUrl, filename) {
-      return runAsync('saveAudioFile', dataUrl, filename);
+      if (!dataUrl || !dataUrl.startsWith('data:')) {
+        return Promise.reject(new Error('Invalid audio data URL'));
+      }
+      
+      if (!filename) {
+        filename = `audio_${Date.now()}.mp3`;
+      }
+      
+      return runAsync('saveAudioFile', dataUrl, filename)
+        .then(result => {
+          if (!result || !result.fileId) {
+            throw new Error('Server returned invalid file ID');
+          }
+          
+          return result;
+        });
     }
     
     /**
@@ -113,7 +197,18 @@
      * @return {Promise} Promise resolving to audio data URL
      */
     function loadAudio(fileId) {
-      return runAsync('getAudioDataUrl', fileId);
+      if (!fileId) {
+        return Promise.reject(new Error('File ID is required'));
+      }
+      
+      return runAsync('getAudioDataUrl', fileId)
+        .then(dataUrl => {
+          if (!dataUrl || !dataUrl.startsWith('data:')) {
+            throw new Error('Server returned invalid data URL');
+          }
+          
+          return dataUrl;
+        });
     }
     
     /**
@@ -123,6 +218,14 @@
      * @return {Promise} Promise resolving to send result
      */
     function sendQuizToUser(results, userEmail) {
+      if (!results) {
+        return Promise.reject(new Error('Quiz results are required'));
+      }
+      
+      if (!userEmail || !userEmail.includes('@')) {
+        return Promise.reject(new Error('Valid email address is required'));
+      }
+      
       return runAsync('sendQuizResultsToUser', results, userEmail);
     }
     
@@ -133,19 +236,54 @@
      * @return {Promise} Promise resolving to send result
      */
     function sendQuizToCreator(results, creatorEmail) {
+      if (!results) {
+        return Promise.reject(new Error('Quiz results are required'));
+      }
+      
+      if (!creatorEmail || !creatorEmail.includes('@')) {
+        return Promise.reject(new Error('Valid email address is required'));
+      }
+      
       return runAsync('sendQuizResultsToCreator', results, creatorEmail);
+    }
+    
+    /**
+     * Clear image cache for a specific fileId or all images
+     * @param {string} fileId - Optional file ID to clear specific cache
+     */
+    function clearImageCache(fileId = null) {
+      if (window.sessionStorage) {
+        if (fileId) {
+          // Clear specific image
+          sessionStorage.removeItem(`image:${fileId}`);
+        } else {
+          // Clear all cached images
+          const keysToRemove = [];
+          for (let i = 0; i < sessionStorage.length; i++) {
+            const key = sessionStorage.key(i);
+            if (key.startsWith('image:')) {
+              keysToRemove.push(key);
+            }
+          }
+          
+          keysToRemove.forEach(key => sessionStorage.removeItem(key));
+        }
+      }
     }
     
     // Public API
     return {
       saveProject,
       loadProject,
+      listProjects,
+      deleteProject,
       uploadImage,
       loadImage,
       uploadAudio,
       loadAudio,
       sendQuizToUser,
-      sendQuizToCreator
+      sendQuizToCreator,
+      clearImageCache
     };
   })();
   </script>

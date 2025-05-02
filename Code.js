@@ -98,13 +98,35 @@ function deleteProject(projectId) {
 }
 
 /**
+ * Validates if a fileId exists in Drive.
+ * @param {string} fileId - The file ID to validate
+ * @return {boolean} True if file exists, false otherwise
+ */
+function validateFileId_(fileId) {
+  if (!fileId) return false;
+  
+  try {
+    // Try to get the file by ID
+    const file = DriveApp.getFileById(fileId);
+    return file !== null;
+  } catch (error) {
+    console.error(`Invalid file ID: ${fileId}`, error);
+    return false;
+  }
+}
+
+/**
  * Saves an image (data URL) to Drive and returns fileId.
  * @param {string} dataUrl - The image data URL
  * @param {string} filename - The filename
- * @return {Object} The file ID
+ * @return {Object} The file ID and success status
  */
 function saveImageFile(dataUrl, filename) {
   try {
+    if (!dataUrl || !dataUrl.startsWith('data:')) {
+      throw new Error('Invalid data URL format');
+    }
+    
     const blob = Utilities.newBlob(
       Utilities.base64Decode(dataUrl.split(',')[1]),
       dataUrl.match(/data:(.*?);/)[1],
@@ -112,7 +134,15 @@ function saveImageFile(dataUrl, filename) {
     );
     const folder = getProjectFolder_();
     const file = folder.createFile(blob);
-    return { fileId: file.getId() };
+    const fileId = file.getId();
+    
+    // Validate the fileId was created properly
+    if (!fileId) {
+      throw new Error('Failed to generate valid file ID');
+    }
+    
+    console.log(`Created image file: ${filename} with ID: ${fileId}`);
+    return { fileId: fileId, success: true };
   } catch (error) {
     console.error('Error saving image:', error);
     throw new Error(`Failed to save image: ${error.message}`);
@@ -126,13 +156,30 @@ function saveImageFile(dataUrl, filename) {
  */
 function getImageDataUrl(fileId) {
   try {
+    // Validate fileId
+    if (!fileId) {
+      throw new Error('File ID is empty or undefined');
+    }
+    
+    // Validate file exists
+    if (!validateFileId_(fileId)) {
+      throw new Error('Invalid file ID: File not found');
+    }
+    
     const file = DriveApp.getFileById(fileId);
     const blob = file.getBlob();
     const contentType = blob.getContentType();
+    
+    // Validate content is an image
+    if (!contentType.startsWith('image/')) {
+      throw new Error(`File is not an image: ${contentType}`);
+    }
+    
     const encoded = Utilities.base64Encode(blob.getBytes());
+    console.log(`Successfully loaded image with ID: ${fileId}`);
     return `data:${contentType};base64,${encoded}`;
   } catch (error) {
-    console.error('Error loading image:', error);
+    console.error('Error in getImageDataUrl:', error);
     throw new Error(`Failed to load image: ${error.message}`);
   }
 }
@@ -145,6 +192,10 @@ function getImageDataUrl(fileId) {
  */
 function saveAudioFile(dataUrl, filename) {
   try {
+    if (!dataUrl || !dataUrl.startsWith('data:')) {
+      throw new Error('Invalid data URL format');
+    }
+    
     const blob = Utilities.newBlob(
       Utilities.base64Decode(dataUrl.split(',')[1]),
       dataUrl.match(/data:(.*?);/)[1],
@@ -152,7 +203,15 @@ function saveAudioFile(dataUrl, filename) {
     );
     const folder = getProjectFolder_();
     const file = folder.createFile(blob);
-    return { fileId: file.getId() };
+    const fileId = file.getId();
+    
+    // Validate the fileId was created properly
+    if (!fileId) {
+      throw new Error('Failed to generate valid file ID');
+    }
+    
+    console.log(`Created audio file: ${filename} with ID: ${fileId}`);
+    return { fileId: fileId, success: true };
   } catch (error) {
     console.error('Error saving audio:', error);
     throw new Error(`Failed to save audio: ${error.message}`);
@@ -166,10 +225,28 @@ function saveAudioFile(dataUrl, filename) {
  */
 function getAudioDataUrl(fileId) {
   try {
+    // Validate fileId
+    if (!fileId) {
+      throw new Error('File ID is empty or undefined');
+    }
+    
+    // Validate file exists
+    if (!validateFileId_(fileId)) {
+      throw new Error('Invalid file ID: File not found');
+    }
+    
     const file = DriveApp.getFileById(fileId);
     const blob = file.getBlob();
     const contentType = blob.getContentType();
+    
+    // Validate content is audio
+    if (!contentType.startsWith('audio/')) {
+      console.warn(`File might not be an audio: ${contentType}`);
+      // Continue anyway as some audio files might have non-standard MIME types
+    }
+    
     const encoded = Utilities.base64Encode(blob.getBytes());
+    console.log(`Successfully loaded audio with ID: ${fileId}`);
     return `data:${contentType};base64,${encoded}`;
   } catch (error) {
     console.error('Error loading audio:', error);

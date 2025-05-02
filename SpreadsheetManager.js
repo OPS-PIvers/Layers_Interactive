@@ -148,7 +148,7 @@ class SpreadsheetManager {
         elementsSheet.clear();
       }
       
-      // Add headers
+      // Add headers - Added fileId column for image elements
       elementsSheet.appendRow([
         'elementId',
         'slideId',
@@ -162,11 +162,12 @@ class SpreadsheetManager {
         'initiallyHidden',
         'style',
         'text',
-        'interactions'
+        'interactions',
+        'fileId'  // New column for image fileId
       ]);
       
-      // Format headers
-      elementsSheet.getRange('A1:M1').setFontWeight('bold');
+      // Format headers - Updated range to include new fileId column
+      elementsSheet.getRange('A1:N1').setFontWeight('bold');
       elementsSheet.setFrozenRows(1);
       
       // Add element data
@@ -174,6 +175,9 @@ class SpreadsheetManager {
         projectData.slides.forEach(slide => {
           if (slide.elements && slide.elements.length > 0) {
             slide.elements.forEach(element => {
+              // Extract fileId for image elements
+              const fileId = element.type === 'image' ? element.fileId || '' : '';
+              
               elementsSheet.appendRow([
                 element.id,
                 slide.slideId,
@@ -187,7 +191,8 @@ class SpreadsheetManager {
                 element.initiallyHidden ? 'TRUE' : 'FALSE',
                 JSON.stringify(element.style || {}),
                 JSON.stringify(element.text || {}),
-                JSON.stringify(element.interactions || {})
+                JSON.stringify(element.interactions || {}),
+                fileId  // Store fileId in its own column
               ]);
             });
           }
@@ -335,6 +340,10 @@ class SpreadsheetManager {
       const data = elementsSheet.getDataRange().getValues();
       const elements = [];
       
+      // Get header row to determine column indices
+      const headers = data[0];
+      const fileIdIndex = headers.indexOf('fileId');
+      
       // Skip header row
       for (let i = 1; i < data.length; i++) {
         const element = {
@@ -352,6 +361,14 @@ class SpreadsheetManager {
           text: JSON.parse(data[i][11] || '{}'),
           interactions: JSON.parse(data[i][12] || '{}')
         };
+        
+        // Add fileId for image elements if available in the data
+        if (element.type === 'image' && fileIdIndex !== -1 && i < data.length && fileIdIndex < data[i].length) {
+          const fileId = data[i][fileIdIndex];
+          if (fileId) {
+            element.fileId = fileId;
+          }
+        }
         
         elements.push(element);
       }

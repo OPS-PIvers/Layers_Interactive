@@ -1,629 +1,682 @@
 <script>
+  /**
+   * Controls canvas operations using Fabric.js
+   */
+  const CanvasController = (() => {
+    let canvas = null;
+    let currentSlideBg = { type: 'color', value: '#FFFFFF' };
+    let isEditor = false;
+    
     /**
-     * Controls canvas operations using Fabric.js
+     * Initialize canvas
+     * @param {string} id - Canvas element ID
+     * @param {boolean} editorMode - Whether in editor mode
      */
-    const CanvasController = (() => {
-      let canvas = null;
-      let currentSlideBg = { type: 'color', value: '#FFFFFF' };
-      let isEditor = false;
+    function initCanvas(id, editorMode = true) {
+      isEditor = editorMode;
       
-      /**
-       * Initialize canvas
-       * @param {string} id - Canvas element ID
-       * @param {boolean} editorMode - Whether in editor mode
-       */
-      function initCanvas(id, editorMode = true) {
-        isEditor = editorMode;
+      // Create Fabric.js canvas
+      canvas = new fabric.Canvas(id, {
+        preserveObjectStacking: true,
+        selection: editorMode, // Allow selection only in editor mode
+        interactive: editorMode // Allow interaction only in editor mode
+      });
+      
+      // Add event listeners if in editor mode
+      if (editorMode) {
+        canvas.on('selection:created', () => EditorUI?.updatePropertiesPanel(canvas.getActiveObject()));
+        canvas.on('selection:updated', () => EditorUI?.updatePropertiesPanel(canvas.getActiveObject()));
+        canvas.on('selection:cleared', () => EditorUI?.updatePropertiesPanel(null));
         
-        // Create Fabric.js canvas
-        canvas = new fabric.Canvas(id, {
-          preserveObjectStacking: true,
-          selection: editorMode, // Allow selection only in editor mode
-          interactive: editorMode // Allow interaction only in editor mode
+        // Update object coordinates on move/resize
+        canvas.on('object:modified', (e) => {
+          const obj = e.target;
+          if (!obj || !obj.id) return;
+          
+          // Update element data
+          updateElementDataFromObject(obj);
+        });
+      } else {
+        // Viewer mode - disable selection
+        canvas.selection = false;
+        canvas.hoverCursor = 'pointer';
+      }
+      
+      // Handle window resize
+      window.addEventListener('resize', Utils.debounce(resizeCanvas, 250));
+      resizeCanvas();
+    }
+    
+    /**
+     * Resize canvas to fit container
+     */
+    function resizeCanvas() {
+      if (!canvas || !canvas.wrapperEl) return;
+      
+      const container = canvas.wrapperEl.parentNode;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      
+      canvas.setWidth(width);
+      canvas.setHeight(height);
+      canvas.renderAll();
+    }
+    
+    /**
+     * Load slide onto canvas
+     * @param {Object} slide - Slide data
+     */
+    function loadSlide(slide) {
+      if (!canvas || !slide) return;
+      
+      // Clear canvas
+      canvas.clear();
+      canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+      
+      // Set background if available
+      if (slide.imageFileId) {
+        setBackgroundImage(slide.imageFileId);
+      } else if (slide.backgroundColor) {
+        canvas.setBackgroundColor(slide.backgroundColor);
+        currentSlideBg = { type: 'color', value: slide.backgroundColor };
+      } else {
+        canvas.setBackgroundColor('#FFFFFF');
+        currentSlideBg = { type: 'color', value: '#FFFFFF' };
+      }
+      
+      // Add slide elements
+      slide.elements.forEach(addObject);
+      
+      // YouTube container visibility
+      const youtubeContainer = document.getElementById('youtube-container');
+      if (youtubeContainer) {
+        youtubeContainer.style.display = slide.slideType === 'youtube' ? 'block' : 'none';
+        youtubeContainer.innerHTML = '';
+        
+        // Initialize YouTube player if needed
+        if (slide.slideType === 'youtube' && slide.youtubeVideoId) {
+          YouTubeManager?.initializePlayer('youtube-container', slide.youtubeVideoId);
+          
+          // Set overlay timings if available
+          if (slide.overlayTimings) {
+            YouTubeManager?.setOverlayTimings(slide.overlayTimings);
+          }
+        }
+      }
+      
+      canvas.renderAll();
+    }
+    
+    /**
+     * Add object to canvas from data
+     * @param {Object} data - Element data
+     * @return {fabric.Object} Created object
+     */
+    function addObject(data) {
+      if (!canvas) return null;
+      
+      const opts = {
+        left: data.left || 100,
+        top: data.top || 100,
+        width: data.width || 100,
+        height: data.height || 100,
+        angle: data.angle || 0,
+        id: data.id,
+        selectable: isEditor,
+        hasControls: isEditor,
+        hasBorders: isEditor
+      };
+      
+      // Add style properties if available
+      if (data.style) {
+        opts.fill = data.style.color || '#ff0000';
+        opts.opacity = data.style.opacity !== undefined ? data.style.opacity : 1;
+        
+        // Add outline if enabled
+        if (data.style.outlineEnabled) {
+          opts.stroke = data.style.outlineColor || '#000000';
+          opts.strokeWidth = data.style.outlineWidth || 1;
+        }
+        
+        // Add shadow if enabled
+        if (data.style.shadowEnabled) {
+          opts.shadow = new fabric.Shadow({
+            color: data.style.shadowColor || '#000000',
+            blur: data.style.shadowBlur || 5,
+            offsetX: data.style.shadowOffsetX || 0,
+            offsetY: data.style.shadowOffsetY || 0
+          });
+        }
+      }
+      
+      // Create object based on type
+      let obj;
+      
+      // In the addObject function, modify the switch statement:
+      switch (data.type) {
+      case 'rect':
+          obj = new fabric.Rect(opts);
+          break;
+          
+      case 'ellipse':
+          obj = new fabric.Ellipse({
+          ...opts,
+          rx: data.width / 2,
+          ry: data.height / 2
+          });
+          break;
+          
+      case 'textbox':
+          obj = new fabric.Textbox(data.text?.content || 'Text', {
+          ...opts,
+          fontSize: data.text?.fontSize || 16,
+          fontFamily: data.text?.fontFamily || 'Arial',
+          fontWeight: data.text?.fontWeight || 'normal',
+          fontStyle: data.text?.fontStyle || 'normal',
+          textAlign: data.text?.textAlign || 'center',
+          fill: data.text?.fill || '#000000'
+          });
+          break;
+          
+      case 'image':
+          // For image objects, we need to load asynchronously
+          // Return a promise instead of an object directly
+          return addImageObject(data);
+          
+      default:
+          console.error('Unknown object type:', data.type);
+          return null;
+      }
+      
+      // Add object to canvas
+      canvas.add(obj);
+      
+      // Apply text if available (for non-textbox objects)
+      if (data.type !== 'textbox' && data.text && data.text.content) {
+        TextEditor.applyStoredTextSettings(obj);
+      }
+      
+      // Apply animation if enabled
+      if (data.style?.animation?.enabled && data.style?.animation?.trigger === 'always') {
+        AnimationController.applyStoredAnimation(obj);
+      }
+      
+      // Add interaction handlers
+      if (data.interactions) {
+        InteractionHandler.attachListenersToObject(obj);
+      }
+      
+      // Set initial visibility
+      if (data.initiallyHidden) {
+        obj.visible = false;
+      }
+      
+      return obj;
+    }
+    
+    /**
+     * Update element data from object
+     * @param {fabric.Object} obj - Fabric object
+     * @return {boolean} Success
+     */
+    function updateElementDataFromObject(obj) {
+      if (!obj || !obj.id) return false;
+      
+      // Get basic properties
+      const updates = {
+        left: obj.left,
+        top: obj.top,
+        width: obj.width,
+        height: obj.height,
+        angle: obj.angle || 0
+      };
+      
+      // Update element data
+      return StateManager.updateElementData(obj.id, updates);
+    }
+    
+    /**
+     * Update object from data
+     * @param {string} elementId - Element ID
+     * @return {boolean} Success
+     */
+    function updateObjectFromData(elementId) {
+      if (!canvas) return false;
+      
+      const data = StateManager.getElementData(elementId);
+      if (!data) return false;
+      
+      const obj = getObjectById(elementId);
+      if (!obj) return false;
+      
+      // Update properties
+      obj.set({
+        left: data.left,
+        top: data.top,
+        width: data.width,
+        height: data.height,
+        angle: data.angle || 0
+      });
+      
+      // Update style
+      if (data.style) {
+        obj.set({
+          fill: data.style.color || '#ff0000',
+          opacity: data.style.opacity !== undefined ? data.style.opacity : 1
         });
         
-        // Add event listeners if in editor mode
-        if (editorMode) {
-          canvas.on('selection:created', () => EditorUI?.updatePropertiesPanel(canvas.getActiveObject()));
-          canvas.on('selection:updated', () => EditorUI?.updatePropertiesPanel(canvas.getActiveObject()));
-          canvas.on('selection:cleared', () => EditorUI?.updatePropertiesPanel(null));
-          
-          // Update object coordinates on move/resize
-          canvas.on('object:modified', (e) => {
-            const obj = e.target;
-            if (!obj || !obj.id) return;
-            
-            // Update element data
-            updateElementDataFromObject(obj);
+        // Update outline
+        if (data.style.outlineEnabled) {
+          obj.set({
+            stroke: data.style.outlineColor || '#000000',
+            strokeWidth: data.style.outlineWidth || 1
           });
         } else {
-          // Viewer mode - disable selection
-          canvas.selection = false;
-          canvas.hoverCursor = 'pointer';
+          obj.set({
+            stroke: undefined,
+            strokeWidth: 0
+          });
         }
         
-        // Handle window resize
-        window.addEventListener('resize', Utils.debounce(resizeCanvas, 250));
-        resizeCanvas();
-      }
-      
-      /**
-       * Resize canvas to fit container
-       */
-      function resizeCanvas() {
-        if (!canvas || !canvas.wrapperEl) return;
-        
-        const container = canvas.wrapperEl.parentNode;
-        const width = container.clientWidth;
-        const height = container.clientHeight;
-        
-        canvas.setWidth(width);
-        canvas.setHeight(height);
-        canvas.renderAll();
-      }
-      
-      /**
-       * Load slide onto canvas
-       * @param {Object} slide - Slide data
-       */
-      function loadSlide(slide) {
-        if (!canvas || !slide) return;
-        
-        // Clear canvas
-        canvas.clear();
-        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-        
-        // Set background if available
-        if (slide.imageFileId) {
-          setBackgroundImage(slide.imageFileId);
-        } else if (slide.backgroundColor) {
-          canvas.setBackgroundColor(slide.backgroundColor);
-          currentSlideBg = { type: 'color', value: slide.backgroundColor };
-        } else {
-          canvas.setBackgroundColor('#FFFFFF');
-          currentSlideBg = { type: 'color', value: '#FFFFFF' };
-        }
-        
-        // Add slide elements
-        slide.elements.forEach(addObject);
-        
-        // YouTube container visibility
-        const youtubeContainer = document.getElementById('youtube-container');
-        if (youtubeContainer) {
-          youtubeContainer.style.display = slide.slideType === 'youtube' ? 'block' : 'none';
-          youtubeContainer.innerHTML = '';
-          
-          // Initialize YouTube player if needed
-          if (slide.slideType === 'youtube' && slide.youtubeVideoId) {
-            YouTubeManager?.initializePlayer('youtube-container', slide.youtubeVideoId);
-            
-            // Set overlay timings if available
-            if (slide.overlayTimings) {
-              YouTubeManager?.setOverlayTimings(slide.overlayTimings);
-            }
-          }
-        }
-        
-        canvas.renderAll();
-      }
-      
-      /**
-       * Add object to canvas from data
-       * @param {Object} data - Element data
-       * @return {fabric.Object} Created object
-       */
-      function addObject(data) {
-        if (!canvas) return null;
-        
-        const opts = {
-          left: data.left || 100,
-          top: data.top || 100,
-          width: data.width || 100,
-          height: data.height || 100,
-          angle: data.angle || 0,
-          id: data.id,
-          selectable: isEditor,
-          hasControls: isEditor,
-          hasBorders: isEditor
-        };
-        
-        // Add style properties if available
-        if (data.style) {
-          opts.fill = data.style.color || '#ff0000';
-          opts.opacity = data.style.opacity !== undefined ? data.style.opacity : 1;
-          
-          // Add outline if enabled
-          if (data.style.outlineEnabled) {
-            opts.stroke = data.style.outlineColor || '#000000';
-            opts.strokeWidth = data.style.outlineWidth || 1;
-          }
-          
-          // Add shadow if enabled
-          if (data.style.shadowEnabled) {
-            opts.shadow = new fabric.Shadow({
+        // Update shadow
+        if (data.style.shadowEnabled) {
+          // Use the universal set method which works with all object types
+          const shadowObj = new fabric.Shadow({
               color: data.style.shadowColor || '#000000',
               blur: data.style.shadowBlur || 5,
               offsetX: data.style.shadowOffsetX || 0,
               offsetY: data.style.shadowOffsetY || 0
-            });
+          });
+          obj.set('shadow', shadowObj);
+          } else {
+          obj.set('shadow', null);
           }
-        }
-        
-        // Create object based on type
-        let obj;
-        
-        // In the addObject function, modify the switch statement:
-        switch (data.type) {
-        case 'rect':
-            obj = new fabric.Rect(opts);
-            break;
-            
-        case 'ellipse':
-            obj = new fabric.Ellipse({
-            ...opts,
-            rx: data.width / 2,
-            ry: data.height / 2
-            });
-            break;
-            
-        case 'textbox':
-            obj = new fabric.Textbox(data.text?.content || 'Text', {
-            ...opts,
-            fontSize: data.text?.fontSize || 16,
-            fontFamily: data.text?.fontFamily || 'Arial',
-            fontWeight: data.text?.fontWeight || 'normal',
-            fontStyle: data.text?.fontStyle || 'normal',
-            textAlign: data.text?.textAlign || 'center',
-            fill: data.text?.fill || '#000000'
-            });
-            break;
-            
-        case 'image':
-            // For image objects, we need to load asynchronously
-            // Return a promise instead of an object directly
-            return addImageObject(data);
-            
-        default:
-            console.error('Unknown object type:', data.type);
-            return null;
-        }
-        
-        // Add object to canvas
-        canvas.add(obj);
-        
-        // Apply text if available (for non-textbox objects)
-        if (data.type !== 'textbox' && data.text && data.text.content) {
-          TextEditor.applyStoredTextSettings(obj);
-        }
-        
-        // Apply animation if enabled
-        if (data.style?.animation?.enabled && data.style?.animation?.trigger === 'always') {
-          AnimationController.applyStoredAnimation(obj);
-        }
-        
-        // Add interaction handlers
-        if (data.interactions) {
-          InteractionHandler.attachListenersToObject(obj);
-        }
-        
-        // Set initial visibility
-        if (data.initiallyHidden) {
-          obj.visible = false;
-        }
-        
-        return obj;
       }
       
-      /**
-       * Update element data from object
-       * @param {fabric.Object} obj - Fabric object
-       * @return {boolean} Success
-       */
-      function updateElementDataFromObject(obj) {
-        if (!obj || !obj.id) return false;
-        
-        // Get basic properties
-        const updates = {
-          left: obj.left,
-          top: obj.top,
-          width: obj.width,
-          height: obj.height,
-          angle: obj.angle || 0
-        };
-        
-        // Update element data
-        return StateManager.updateElementData(obj.id, updates);
-      }
-      
-      /**
-       * Update object from data
-       * @param {string} elementId - Element ID
-       * @return {boolean} Success
-       */
-      function updateObjectFromData(elementId) {
-        if (!canvas) return false;
-        
-        const data = StateManager.getElementData(elementId);
-        if (!data) return false;
-        
-        const obj = getObjectById(elementId);
-        if (!obj) return false;
-        
-        // Update properties
-        obj.set({
-          left: data.left,
-          top: data.top,
-          width: data.width,
-          height: data.height,
-          angle: data.angle || 0
-        });
-        
-        // Update style
-        if (data.style) {
+      // Update text if needed
+      if (data.text) {
+        if (obj.type === 'textbox') {
           obj.set({
-            fill: data.style.color || '#ff0000',
-            opacity: data.style.opacity !== undefined ? data.style.opacity : 1
+            text: data.text.content || 'Text',
+            fontSize: data.text.fontSize || 16,
+            fontFamily: data.text.fontFamily || 'Arial',
+            fontWeight: data.text.fontWeight || 'normal',
+            fontStyle: data.text.fontStyle || 'normal',
+            textAlign: data.text.textAlign || 'center',
+            fill: data.text.fill || '#000000'
           });
-          
-          // Update outline
-          if (data.style.outlineEnabled) {
-            obj.set({
-              stroke: data.style.outlineColor || '#000000',
-              strokeWidth: data.style.outlineWidth || 1
-            });
-          } else {
-            obj.set({
-              stroke: undefined,
-              strokeWidth: 0
-            });
-          }
-          
-          // Update shadow
-          if (data.style.shadowEnabled) {
-            // Use the universal set method which works with all object types
-            const shadowObj = new fabric.Shadow({
-                color: data.style.shadowColor || '#000000',
-                blur: data.style.shadowBlur || 5,
-                offsetX: data.style.shadowOffsetX || 0,
-                offsetY: data.style.shadowOffsetY || 0
-            });
-            obj.set('shadow', shadowObj);
-            } else {
-            obj.set('shadow', null);
-            }
-        }
-        
-        // Update text if needed
-        if (data.text) {
-          if (obj.type === 'textbox') {
-            obj.set({
-              text: data.text.content || 'Text',
-              fontSize: data.text.fontSize || 16,
-              fontFamily: data.text.fontFamily || 'Arial',
-              fontWeight: data.text.fontWeight || 'normal',
-              fontStyle: data.text.fontStyle || 'normal',
-              textAlign: data.text.textAlign || 'center',
-              fill: data.text.fill || '#000000'
-            });
-          } else {
-            // Update text overlay
-            TextEditor.updateObjectTextDisplay(obj, data.text);
-          }
-        }
-        
-        // Update animation if needed
-        if (data.style?.animation?.enabled && data.style?.animation?.trigger === 'always') {
-          AnimationController.applyStoredAnimation(obj);
         } else {
-          AnimationController.stopAnimation(obj);
+          // Update text overlay
+          TextEditor.updateObjectTextDisplay(obj, data.text);
         }
-        
-        // Update visibility
-        obj.visible = !data.initiallyHidden;
-        
-        // Update canvas
-        canvas.renderAll();
-        
-        return true;
       }
       
-      /**
-       * Set background image
-       * @param {string} imageFileId - Image file ID
-       * @return {Promise} Promise resolving when image is set
-       */
-      function setBackgroundImage(imageFileId) {
-        return new Promise((resolve, reject) => {
-          if (!canvas) {
-            reject('Canvas not available');
-            return;
-          }
-          
-          Utils.showLoadingIndicator(true, 'Loading background image...');
-          
-          ServerClient.loadImage(imageFileId)
-            .then(dataUrl => {
-              fabric.Image.fromURL(dataUrl, img => {
-                if (!img) {
-                  Utils.showLoadingIndicator(false);
-                  reject('Failed to load image');
-                  return;
-                }
-                
-                // Calculate scaling to fit canvas
-                const canvasWidth = canvas.width;
-                const canvasHeight = canvas.height;
-                const imgWidth = img.width;
-                const imgHeight = img.height;
-                
-                let scale = 1;
-                if (imgWidth > canvasWidth || imgHeight > canvasHeight) {
-                  const scaleX = canvasWidth / imgWidth;
-                  const scaleY = canvasHeight / imgHeight;
-                  scale = Math.min(scaleX, scaleY);
-                }
-                
-                // Set background image
-                canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
-                  scaleX: scale,
-                  scaleY: scale,
-                  originX: 'left',
-                  originY: 'top'
-                });
-                
-                // Update current background
-                currentSlideBg = { type: 'image', value: imageFileId };
-                
-                // Update slide data
-                const slide = StateManager.getCurrentSlide();
-                if (slide) {
-                  StateManager.updateSlideProperties(slide.slideId, {
-                    imageFileId,
-                    backgroundColor: null
-                  });
-                }
-                
+      // Update animation if needed
+      if (data.style?.animation?.enabled && data.style?.animation?.trigger === 'always') {
+        AnimationController.applyStoredAnimation(obj);
+      } else {
+        AnimationController.stopAnimation(obj);
+      }
+      
+      // Update visibility
+      obj.visible = !data.initiallyHidden;
+      
+      // Update canvas
+      canvas.renderAll();
+      
+      return true;
+    }
+    
+    /**
+     * Set background image
+     * @param {string} imageFileId - Image file ID
+     * @return {Promise} Promise resolving when image is set
+     */
+    function setBackgroundImage(imageFileId) {
+      return new Promise((resolve, reject) => {
+        if (!canvas) {
+          reject('Canvas not available');
+          return;
+        }
+        
+        Utils.showLoadingIndicator(true, 'Loading background image...');
+        
+        ServerClient.loadImage(imageFileId)
+          .then(dataUrl => {
+            fabric.Image.fromURL(dataUrl, img => {
+              if (!img) {
                 Utils.showLoadingIndicator(false);
-                resolve();
+                reject('Failed to load image');
+                return;
+              }
+              
+              // Calculate scaling to fit canvas
+              const canvasWidth = canvas.width;
+              const canvasHeight = canvas.height;
+              const imgWidth = img.width;
+              const imgHeight = img.height;
+              
+              let scale = 1;
+              if (imgWidth > canvasWidth || imgHeight > canvasHeight) {
+                const scaleX = canvasWidth / imgWidth;
+                const scaleY = canvasHeight / imgHeight;
+                scale = Math.min(scaleX, scaleY);
+              }
+              
+              // Set background image
+              canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
+                scaleX: scale,
+                scaleY: scale,
+                originX: 'left',
+                originY: 'top'
               });
-            })
-            .catch(error => {
+              
+              // Update current background
+              currentSlideBg = { type: 'image', value: imageFileId };
+              
+              // Update slide data
+              const slide = StateManager.getCurrentSlide();
+              if (slide) {
+                StateManager.updateSlideProperties(slide.slideId, {
+                  imageFileId,
+                  backgroundColor: null
+                });
+              }
+              
               Utils.showLoadingIndicator(false);
-              reject(error);
+              resolve();
             });
+          })
+          .catch(error => {
+            Utils.showLoadingIndicator(false);
+            reject(error);
+          });
+      });
+    }
+    
+    /**
+     * Set background color
+     * @param {string} color - Background color
+     */
+    function setBackgroundColor(color) {
+      if (!canvas) return;
+      
+      canvas.setBackgroundColor(color);
+      canvas.renderAll();
+      
+      // Update current background
+      currentSlideBg = { type: 'color', value: color };
+      
+      // Update slide data
+      const slide = StateManager.getCurrentSlide();
+      if (slide) {
+        StateManager.updateSlideProperties(slide.slideId, {
+          backgroundColor: color,
+          imageFileId: null
         });
       }
+    }
+    
+    /**
+     * Get object by ID
+     * @param {string} id - Object ID
+     * @return {fabric.Object} Fabric object
+     */
+    function getObjectById(id) {
+      if (!canvas) return null;
       
-      /**
-       * Set background color
-       * @param {string} color - Background color
-       */
-      function setBackgroundColor(color) {
-        if (!canvas) return;
-        
-        canvas.setBackgroundColor(color);
-        canvas.renderAll();
-        
-        // Update current background
-        currentSlideBg = { type: 'color', value: color };
-        
-        // Update slide data
-        const slide = StateManager.getCurrentSlide();
-        if (slide) {
-          StateManager.updateSlideProperties(slide.slideId, {
-            backgroundColor: color,
-            imageFileId: null
-          });
+      // Search all objects
+      for (const obj of canvas.getObjects()) {
+        if (obj.id === id) {
+          return obj;
         }
       }
       
-      /**
-       * Get object by ID
-       * @param {string} id - Object ID
-       * @return {fabric.Object} Fabric object
-       */
-      function getObjectById(id) {
-        if (!canvas) return null;
-        
-        // Search all objects
-        for (const obj of canvas.getObjects()) {
-          if (obj.id === id) {
-            return obj;
-          }
-        }
-        
-        return null;
-      }
+      return null;
+    }
+    
+    /**
+     * Create a new element
+     * @param {string} type - Element type
+     * @param {number} left - X position
+     * @param {number} top - Y position
+     * @param {Object} options - Additional options
+     * @return {fabric.Object} Created object
+     */
+    function createElement(type, left, top, options = {}) {
+      if (!canvas) return null;
       
-      /**
-       * Create a new element
-       * @param {string} type - Element type
-       * @param {number} left - X position
-       * @param {number} top - Y position
-       * @param {Object} options - Additional options
-       * @return {fabric.Object} Created object
-       */
-      function createElement(type, left, top, options = {}) {
-        if (!canvas) return null;
-        
-        // Create element data
-        const elementId = Utils.generateId('element-');
-        const elementData = {
-          id: elementId,
-          type: type,
-          left: left,
-          top: top,
-          width: options.width || 100,
-          height: options.height || 100,
-          style: {
-            color: options.color || '#ff0000',
-            opacity: options.opacity !== undefined ? options.opacity : 1
-          },
-          initiallyHidden: options.initiallyHidden || false
-        };
-        
-        // Add to state manager
-        StateManager.addElementData(elementData);
-        
-        // Add to canvas
-        const obj = addObject(elementData);
-        
-        // Select the new object
-        if (isEditor && obj) {
+      // Create element data
+      const elementId = Utils.generateId('element-');
+      const elementData = {
+        id: elementId,
+        type: type,
+        left: left,
+        top: top,
+        width: options.width || 100,
+        height: options.height || 100,
+        style: {
+          color: options.color || '#ff0000',
+          opacity: options.opacity !== undefined ? options.opacity : 1
+        },
+        initiallyHidden: options.initiallyHidden || false
+      };
+      
+      // Add to state manager
+      StateManager.addElementData(elementData);
+      
+      // Add to canvas
+      const obj = addObject(elementData);
+      
+      // Select the new object
+      if (isEditor && obj) {
+        // Handle if obj is a Promise (for images)
+        if (obj instanceof Promise) {
+          obj.then(fabricObj => {
+            if (fabricObj) {
+              canvas.setActiveObject(fabricObj);
+              canvas.renderAll();
+              // Update properties panel
+              EditorUI?.updatePropertiesPanel(fabricObj);
+            }
+          }).catch(err => console.error('Error selecting new image object:', err));
+        } else {
           canvas.setActiveObject(obj);
           canvas.renderAll();
-          
           // Update properties panel
           EditorUI?.updatePropertiesPanel(obj);
         }
-        
-        return obj;
       }
       
-      /**
-       * Delete selected object
-       * @return {boolean} Success
-       */
-      function deleteSelected() {
-        if (!canvas) return false;
-        
-        const obj = canvas.getActiveObject();
-        if (!obj || !obj.id) return false;
-        
-        // Remove from state manager
-        StateManager.removeElementData(obj.id);
-        
-        // Remove from canvas
-        canvas.remove(obj);
-        canvas.renderAll();
-        
-        return true;
-      }
-      /**
-     * Add image object to canvas from data
-     * @param {Object} data - Element data with image properties
-     * @return {Promise<fabric.Object>} Promise resolving to created object
-     */
-    function addImageObject(data) {
-    return new Promise((resolve, reject) => {
-        if (!canvas) {
-        reject(new Error('Canvas not available'));
-        return;
-        }
-        
-        // Load image data
-        ServerClient.loadImage(data.fileId)
-        .then(dataUrl => {
-            fabric.Image.fromURL(dataUrl, img => {
-            if (!img) {
-                reject(new Error('Failed to create image object'));
-                return;
-            }
-            
-            // Set basic properties
-            img.set({
-                left: data.left || 100,
-                top: data.top || 100,
-                width: data.width,
-                height: data.height,
-                angle: data.angle || 0,
-                id: data.id,
-                selectable: isEditor,
-                hasControls: isEditor,
-                hasBorders: isEditor
-            });
-            
-            // Set style properties if available
-            if (data.style) {
-                img.set({
-                opacity: data.style.opacity !== undefined ? data.style.opacity : 1
-                });
-                
-                // Add shadow if enabled
-                if (data.style.shadowEnabled) {
-                const shadow = new fabric.Shadow({
-                    color: data.style.shadowColor || '#000000',
-                    blur: data.style.shadowBlur || 5,
-                    offsetX: data.style.shadowOffsetX || 0,
-                    offsetY: data.style.shadowOffsetY || 0
-                });
-                img.set('shadow', shadow);
-                }
-            }
-            
-            // Add to canvas
-            canvas.add(img);
-            
-            // Add interaction handlers
-            if (data.interactions) {
-                InteractionHandler.attachListenersToObject(img);
-            }
-            
-            // Set initial visibility
-            if (data.initiallyHidden) {
-                img.visible = false;
-            }
-            
-            canvas.renderAll();
-            resolve(img);
-            });
-        })
-        .catch(error => {
-            console.error('Error loading image:', error);
-            reject(error);
-        });
-    });
+      return obj;
     }
-      /**
-       * Show or hide elements
-       * @param {Array} elementIds - Array of element IDs
-       * @param {boolean} visible - Whether to show or hide
-       */
-      function setElementsVisibility(elementIds, visible) {
-        if (!canvas) return;
-        
-        elementIds.forEach(id => {
-          const obj = getObjectById(id);
-          if (obj) {
-            obj.visible = visible;
-            
-            // Apply animation if becoming visible
-            if (visible) {
-              const data = StateManager.getElementData(id);
-              if (data?.style?.animation?.enabled && data?.style?.animation?.trigger === 'onReveal') {
-                AnimationController.triggerAnimation(obj, 'onReveal');
-              }
-            } else {
-              // Stop animations if becoming hidden
-              AnimationController.stopAnimation(obj);
-            }
-          }
-        });
-        
-        canvas.renderAll();
-      }
+    
+    /**
+     * Delete selected object
+     * @return {boolean} Success
+     */
+    function deleteSelected() {
+      if (!canvas) return false;
       
-      // Public API
-      return {
-        initCanvas,
-        resizeCanvas,
-        loadSlide,
-        addObject,
-        updateObjectFromData,
-        setBackgroundImage,
-        setBackgroundColor,
-        getObjectById,
-        createElement,
-        deleteSelected,
-        setElementsVisibility,
-        getCanvas: () => canvas,
-        getViewportTransform: () => canvas ? canvas.viewportTransform : null,
-        setViewportTransform: (transform) => {
-          if (canvas) {
-            canvas.setViewportTransform(transform);
-            canvas.renderAll();
+      const obj = canvas.getActiveObject();
+      if (!obj || !obj.id) return false;
+      
+      // Remove from state manager
+      StateManager.removeElementData(obj.id);
+      
+      // Remove from canvas
+      canvas.remove(obj);
+      canvas.renderAll();
+      
+      return true;
+    }
+    /**
+   * Add image object to canvas from data
+   * @param {Object} data - Element data with image properties
+   * @return {Promise<fabric.Object>} Promise resolving to created object
+   */
+  function addImageObject(data) {
+      return new Promise((resolve, reject) => {
+          if (!canvas) {
+              reject(new Error('Canvas not available'));
+              return;
+          }
+          
+          // Verify fileId exists
+          if (!data.fileId) {
+              console.error('Missing fileId for image element:', data.id);
+              // Create a placeholder image object with error indication
+              const placeholderObj = new fabric.Text('Image Error: Missing fileId', {
+                  left: data.left || 100,
+                  top: data.top || 100,
+                  width: data.width || 100,
+                  height: data.height || 50,
+                  id: data.id,
+                  fill: 'red',
+                  selectable: isEditor,
+                  hasControls: isEditor,
+                  hasBorders: isEditor
+              });
+              canvas.add(placeholderObj);
+              canvas.renderAll();
+              resolve(placeholderObj);
+              return;
+          }
+          
+          console.log(`Loading image for element ${data.id} with fileId: ${data.fileId}`);
+          
+          // Load image data
+          ServerClient.loadImage(data.fileId)
+              .then(dataUrl => {
+                  fabric.Image.fromURL(dataUrl, img => {
+                      if (!img) {
+                          reject(new Error('Failed to create image object'));
+                          return;
+                      }
+                      
+                      // Set basic properties
+                      img.set({
+                          left: data.left || 100,
+                          top: data.top || 100,
+                          width: data.width,
+                          height: data.height,
+                          angle: data.angle || 0,
+                          id: data.id,
+                          fileId: data.fileId, // Store fileId with the object
+                          selectable: isEditor,
+                          hasControls: isEditor,
+                          hasBorders: isEditor
+                      });
+                      
+                      // Set style properties if available
+                      if (data.style) {
+                          img.set({
+                              opacity: data.style.opacity !== undefined ? data.style.opacity : 1
+                          });
+                          
+                          // Add shadow if enabled
+                          if (data.style.shadowEnabled) {
+                              const shadow = new fabric.Shadow({
+                                  color: data.style.shadowColor || '#000000',
+                                  blur: data.style.shadowBlur || 5,
+                                  offsetX: data.style.shadowOffsetX || 0,
+                                  offsetY: data.style.shadowOffsetY || 0
+                              });
+                              img.set('shadow', shadow);
+                          }
+                      }
+                      
+                      // Add to canvas
+                      canvas.add(img);
+                      
+                      // Add interaction handlers
+                      if (data.interactions) {
+                          InteractionHandler.attachListenersToObject(img);
+                      }
+                      
+                      // Set initial visibility
+                      if (data.initiallyHidden) {
+                          img.visible = false;
+                      }
+                      
+                      canvas.renderAll();
+                      resolve(img);
+                  }, {
+                      crossOrigin: 'Anonymous' // Handle cross-origin images
+                  });
+              })
+              .catch(error => {
+                  console.error(`Error loading image for element ${data.id}:`, error);
+                  
+                  // Create a placeholder with error message
+                  const errorText = new fabric.Text(`Image Error: ${error.message || 'Failed to load'}`, {
+                      left: data.left || 100,
+                      top: data.top || 100,
+                      width: data.width || 150,
+                      height: data.height || 50,
+                      id: data.id,
+                      fill: 'red',
+                      selectable: isEditor,
+                      hasControls: isEditor,
+                      hasBorders: isEditor
+                  });
+                  
+                  canvas.add(errorText);
+                  canvas.renderAll();
+                  resolve(errorText); // Resolve with error placeholder
+              });
+      });
+  }
+    /**
+     * Show or hide elements
+     * @param {Array} elementIds - Array of element IDs
+     * @param {boolean} visible - Whether to show or hide
+     */
+    function setElementsVisibility(elementIds, visible) {
+      if (!canvas) return;
+      
+      elementIds.forEach(id => {
+        const obj = getObjectById(id);
+        if (obj) {
+          obj.visible = visible;
+          
+          // Apply animation if becoming visible
+          if (visible) {
+            const data = StateManager.getElementData(id);
+            if (data?.style?.animation?.enabled && data?.style?.animation?.trigger === 'onReveal') {
+              AnimationController.triggerAnimation(obj, 'onReveal');
+            }
+          } else {
+            // Stop animations if becoming hidden
+            AnimationController.stopAnimation(obj);
           }
         }
-      };
-    })();
-    </script>
+      });
+      
+      canvas.renderAll();
+    }
+    
+    // Public API
+    return {
+      initCanvas,
+      resizeCanvas,
+      loadSlide,
+      addObject,
+      updateObjectFromData,
+      setBackgroundImage,
+      setBackgroundColor,
+      getObjectById,
+      createElement,
+      deleteSelected,
+      setElementsVisibility,
+      getCanvas: () => canvas,
+      getViewportTransform: () => canvas ? canvas.viewportTransform : null,
+      setViewportTransform: (transform) => {
+        if (canvas) {
+          canvas.setViewportTransform(transform);
+          canvas.renderAll();
+        }
+      }
+    };
+  })();
+  </script>
